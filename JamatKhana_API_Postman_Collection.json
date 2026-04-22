@@ -1,0 +1,876 @@
+{
+	"info": {
+		"_postman_id": "simplified-census-api",
+		"name": "JamatKhana Census API - Enhanced with User Filters",
+		"description": "Enhanced API collection with comprehensive CRUD operations for User, Form, and Login. Includes detailed user filtering examples and uses PascalCase field names to match database columns.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Login",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/x-www-form-urlencoded"
+							}
+						],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "username",
+									"value": "{{user_email}}",
+									"description": "User email"
+								},
+								{
+									"key": "password",
+									"value": "{{user_password}}",
+									"description": "User password"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/login",
+							"host": ["{{base_url}}"],
+							"path": ["login"]
+						},
+						"description": "Login to get access token"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "User Management",
+			"item": [
+				{
+					"name": "Create User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"Email\": \"test@example.com\",\n  \"FullName\": \"Test User\",\n  \"PhoneNumber\": \"+1234567890\",\n  \"RoleId\": 1,\n  \"StatusId\": 1,\n  \"JamatKhanaIds\": [\"{{jamatkhana_id}}\"],\n  \"IsActive\": true,\n  \"Password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/users/",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""]
+						},
+						"description": "Create a new user with role and JamatKhana assignments"
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Users (No Filters)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""]
+						},
+						"description": "Get all users with default pagination (skip=0, limit=10)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Users by Role",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?role_id=1",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "role_id",
+									"value": "1",
+									"description": "Filter by RoleId (1=Enumerator, 2=Checker, 3=Admin)"
+								}
+							]
+						},
+						"description": "Get all users with RoleId = 1 (Enumerators)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Users by Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?status_id=1",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "status_id",
+									"value": "1",
+									"description": "Filter by StatusId (1=Active, 2=Inactive, 3=Suspended)"
+								}
+							]
+						},
+						"description": "Get all users with StatusId = 1 (Active users)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Users by Email (Partial Match)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?email=admin",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "email",
+									"value": "admin",
+									"description": "Filter by Email (partial match, case-insensitive)"
+								}
+							]
+						},
+						"description": "Get all users whose email contains 'admin' (partial match)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Users by JamatKhana",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?jamatkhana_id={{jamatkhana_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "jamatkhana_id",
+									"value": "{{jamatkhana_id}}",
+									"description": "Filter by associated JamatKhanaId"
+								}
+							]
+						},
+						"description": "Get all users assigned to a specific JamatKhana"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Users with Pagination",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?skip=10&limit=20",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "skip",
+									"value": "10",
+									"description": "Number of records to skip (for pagination)"
+								},
+								{
+									"key": "limit",
+									"value": "20",
+									"description": "Maximum number of records to return"
+								}
+							]
+						},
+						"description": "Get users with pagination (skip first 10, return max 20)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Users with Multiple Filters",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?role_id=1&status_id=1&email=enum&skip=0&limit=50",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "role_id",
+									"value": "1",
+									"description": "Filter by RoleId (1=Enumerator)"
+								},
+								{
+									"key": "status_id",
+									"value": "1",
+									"description": "Filter by StatusId (1=Active)"
+								},
+								{
+									"key": "email",
+									"value": "enum",
+									"description": "Filter by Email containing 'enum'"
+								},
+								{
+									"key": "skip",
+									"value": "0",
+									"description": "Start from first record"
+								},
+								{
+									"key": "limit",
+									"value": "50",
+									"description": "Return up to 50 records"
+								}
+							]
+						},
+						"description": "Get active enumerators with email containing 'enum', returning up to 50 records"
+					},
+					"response": []
+				},
+				{
+					"name": "Get User by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/{{user_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["users", "{{user_id}}"]
+						},
+						"description": "Get a specific user by ID"
+					},
+					"response": []
+				},
+				{
+					"name": "Update User",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"FullName\": \"Updated User Name\",\n  \"PhoneNumber\": \"+9876543210\",\n  \"JamatKhanaIds\": [\"{{jamatkhana_id}}\"],\n  \"IsActive\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/users/{{user_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["users", "{{user_id}}"]
+						},
+						"description": "Update user details (partial update supported)"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete User",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/{{user_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["users", "{{user_id}}"]
+						},
+						"description": "Delete a user (Admin role required)"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Advanced User Operations",
+			"item": [
+				{
+					"name": "Get User Statistics",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?limit=1000",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "limit",
+									"value": "1000",
+									"description": "Get all users for statistics"
+								}
+							]
+						},
+						"description": "Get all users to analyze statistics by role, status, and JamatKhana distribution"
+					},
+					"response": []
+				},
+				{
+					"name": "Find Users by Multiple JamatKhanas",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?jamatkhana_id={{jamatkhana_id}}&role_id=1&status_id=1",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "jamatkhana_id",
+									"value": "{{jamatkhana_id}}",
+									"description": "Primary JamatKhana filter"
+								},
+								{
+									"key": "role_id",
+									"value": "1",
+									"description": "Filter by Enumerator role"
+								},
+								{
+									"key": "status_id",
+									"value": "1",
+									"description": "Filter by Active status"
+								}
+							]
+						},
+						"description": "Find active enumerators assigned to a specific JamatKhana"
+					},
+					"response": []
+				},
+				{
+					"name": "Search Users by Name Pattern",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?email=john&limit=50",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "email",
+									"value": "john",
+									"description": "Search for users with 'john' in email (name pattern)"
+								},
+								{
+									"key": "limit",
+									"value": "50",
+									"description": "Limit results to 50"
+								}
+							]
+						},
+						"description": "Search for users by name pattern using email field (since names are often in email addresses)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Users by Role Distribution",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/users/?role_id=1&limit=1000",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""],
+							"query": [
+								{
+									"key": "role_id",
+									"value": "1",
+									"description": "Filter by Enumerator role"
+								},
+								{
+									"key": "limit",
+									"value": "1000",
+									"description": "Get all enumerators"
+								}
+							]
+						},
+						"description": "Get all enumerators for role distribution analysis"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "User Filtering Guide",
+			"item": [
+				{
+					"name": "📚 User Filtering Documentation",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/users/",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""]
+						},
+						"description": "📋 **USER FILTERING GUIDE**\n\n**Available Query Parameters:**\n\n1. **role_id** (integer): Filter by user role\n   - 1 = Enumerator (Data Collector)\n   - 2 = Checker (Data Reviewer)\n   - 3 = Admin (System Administrator)\n\n2. **status_id** (integer): Filter by user account status\n   - 1 = Active\n   - 2 = Inactive\n   - 3 = Suspended\n\n3. **email** (string): Partial email match (case-insensitive)\n   - Example: `?email=admin` finds users with 'admin' in email\n\n4. **jamatkhana_id** (string): Filter by assigned JamatKhana\n   - Returns users assigned to specific religious center\n\n5. **skip** (integer): Pagination offset (default: 0)\n   - Number of records to skip\n\n6. **limit** (integer): Maximum records to return (default: 10, max: 100)\n\n**Filter Combinations Examples:**\n\n- `?role_id=1&status_id=1` = Active Enumerators\n- `?email=john&limit=20` = Users with 'john' in email, max 20 results\n- `?jamatkhana_id=JK001&role_id=1` = Enumerators assigned to JK001\n- `?skip=20&limit=10` = Page 3 (records 21-30)\n\n**Response Format:**\n```json\n[\n  {\n    \"Id\": \"USER_12345678\",\n    \"Email\": \"user@example.com\",\n    \"FullName\": \"User Name\",\n    \"PhoneNumber\": \"+1234567890\",\n    \"RoleId\": 1,\n    \"StatusId\": 1,\n    \"JamatKhanaIds\": [\"JK001\"],\n    \"IsActive\": true,\n    \"CreatedAt\": \"2024-01-01T00:00:00Z\",\n    \"UpdatedAt\": \"2024-01-01T00:00:00Z\"\n  }\n]\n```"
+					},
+					"response": []
+				},
+				{
+					"name": "🔍 Advanced User Search Examples",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/users/",
+							"host": ["{{base_url}}"],
+							"path": ["users", ""]
+						},
+						"description": "🔍 **ADVANCED SEARCH EXAMPLES**\n\n**1. Find All Active Enumerators:**\n`GET /users/?role_id=1&status_id=1`\n\n**2. Find Users by Email Pattern:**\n`GET /users/?email=@gmail.com`\n\n**3. Find Users in Specific JamatKhana with Pagination:**\n`GET /users/?jamatkhana_id=JK001&skip=0&limit=50`\n\n**4. Find Inactive Admins:**\n`GET /users/?role_id=3&status_id=2`\n\n**5. Find Users by Name Pattern (via Email):**\n`GET /users/?email=john.doe`\n\n**6. Get First 100 Users:**\n`GET /users/?limit=100`\n\n**7. Get Users from Page 5 (50 per page):**\n`GET /users/?skip=200&limit=50`\n\n**8. Find Checkers in Multiple JamatKhanas:**\n`GET /users/?role_id=2&jamatkhana_id=JK001`\n\n**Performance Tips:**\n- Use specific filters to reduce result set\n- Combine filters for precise searches\n- Use pagination for large datasets\n- Avoid very broad searches without limits"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Form CRUD",
+			"item": [
+				{
+					"name": "Create Form",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"JamatKhanaId\": \"{{jamatkhana_id}}\",\n  \"HouseHoldCNIC\": \"12345-6789012-3\",\n  \"HouseOwnership\": true,\n  \"FamilyIncomeStatusIds\": [1, 2],\n  \"FamilyMembersInPakistan\": 2,\n  \"FamilyMembersOutsidePakistan\": 1,\n  \"FamilyMembersCNICInPakistan\": [\"11111-2222222-3\", \"44444-5555555-6\"],\n  \"FamilyMembers\": [\n    {\n      \"IdTypeId\": 1,\n      \"IdNumber\": \"12345-6789012-3\",\n      \"FullName\": \"John Doe\",\n      \"GenderId\": 1,\n      \"MonthYearOfBirth\": \"01/1990\",\n      \"MobileNumber\": \"+1234567890\",\n      \"RelationshipToHeadId\": 1,\n      \"MaritalStatusId\": 2,\n      \"IsBank\": true\n    }\n  ],\n  \"ShouldProceed\": false\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/forms/",
+							"host": ["{{base_url}}"],
+							"path": ["forms", ""]
+						},
+						"description": "Create a new form with family members"
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Forms",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/forms/",
+							"host": ["{{base_url}}"],
+							"path": ["forms", ""]
+						},
+						"description": "Get all forms"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Form by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/forms/{{form_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["forms", "{{form_id}}"]
+						},
+						"description": "Get a specific form by ID with family members"
+					},
+					"response": []
+				},
+				{
+					"name": "Update Form",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"HouseOwnership\": false,\n  \"FamilyIncomeStatusIds\": [3, 4],\n  \"FamilyMembers\": [\n    {\n      \"IdTypeId\": 1,\n      \"IdNumber\": \"98765-4321098-7\",\n      \"FullName\": \"Jane Doe\",\n      \"GenderId\": 2,\n      \"MonthYearOfBirth\": \"05/1985\",\n      \"MobileNumber\": \"+9876543210\",\n      \"RelationshipToHeadId\": 2,\n      \"MaritalStatusId\": 2\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/forms/{{form_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["forms", "{{form_id}}"]
+						},
+						"description": "Update form details and family members"
+					},
+					"response": []
+				},
+				{
+					"name": "Submit Form for Review",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"ShouldProceed\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/forms/{{form_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["forms", "{{form_id}}"]
+						},
+						"description": "Submit form for review (changes status to Under Review)"
+					},
+					"response": []
+				},
+				{
+					"name": "Approve Form",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"FormStatus\": 3\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/forms/{{form_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["forms", "{{form_id}}"]
+						},
+						"description": "Approve form (Checker role)"
+					},
+					"response": []
+				},
+				{
+					"name": "Reject Form",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"FormStatus\": 4,\n  \"RejectReasonText\": \"Incomplete information provided\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/forms/{{form_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["forms", "{{form_id}}"]
+						},
+						"description": "Reject form with reason (Checker role)"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Form",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/forms/{{form_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["forms", "{{form_id}}"]
+						},
+						"description": "Delete a form (Admin role required)"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Lookup Tables",
+			"item": [
+				{
+					"name": "Get Family Income Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/family-income-status/",
+							"host": ["{{base_url}}"],
+							"path": ["family-income-status", ""]
+						},
+						"description": "Get family income status options"
+					},
+					"response": []
+				},
+				{
+					"name": "Get ID Types",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/id-types/",
+							"host": ["{{base_url}}"],
+							"path": ["id-types", ""]
+						},
+						"description": "Get ID types (CNIC, NICOP)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Genders",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/genders/",
+							"host": ["{{base_url}}"],
+							"path": ["genders", ""]
+						},
+						"description": "Get gender options"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Relationships to Head",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/relationships-to-head/",
+							"host": ["{{base_url}}"],
+							"path": ["relationships-to-head", ""]
+						},
+						"description": "Get relationship to head options"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Marital Statuses",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/marital-statuses/",
+							"host": ["{{base_url}}"],
+							"path": ["marital-statuses", ""]
+						},
+						"description": "Get marital status options"
+					},
+					"response": []
+				},
+				{
+					"name": "Get JamatKhanas",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/jamatkhanas/",
+							"host": ["{{base_url}}"],
+							"path": ["jamatkhanas", ""]
+						},
+						"description": "Get all JamatKhanas"
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "access_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "user_email",
+			"value": "admin@example.com",
+			"type": "string"
+		},
+		{
+			"key": "user_password",
+			"value": "admin123",
+			"type": "string"
+		},
+		{
+			"key": "user_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "form_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "jamatkhana_id",
+			"value": "JK001",
+			"type": "string"
+		},
+		{
+			"key": "enumerator_email",
+			"value": "enumerator@example.com",
+			"type": "string"
+		},
+		{
+			"key": "enumerator_password",
+			"value": "enum123",
+			"type": "string"
+		},
+		{
+			"key": "checker_email",
+			"value": "checker@example.com",
+			"type": "string"
+		},
+		{
+			"key": "checker_password",
+			"value": "check123",
+			"type": "string"
+		},
+		{
+			"key": "admin_email",
+			"value": "admin@example.com",
+			"type": "string"
+		},
+		{
+			"key": "admin_password",
+			"value": "admin123",
+			"type": "string"
+		},
+		{
+			"key": "test_user_id",
+			"value": "USER_12345678",
+			"type": "string"
+		},
+		{
+			"key": "test_form_id",
+			"value": "Form-JK001-001",
+			"type": "string"
+		},
+		{
+			"key": "test_jamatkhana_id",
+			"value": "JK001",
+			"type": "string"
+		}
+	]
+}

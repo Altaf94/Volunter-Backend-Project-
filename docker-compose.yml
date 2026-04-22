@@ -1,0 +1,39 @@
+services:
+  # PostgreSQL Database
+
+  # FastAPI Application
+  api:
+    build: .
+    container_name: jamatkhana_api
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=jamat-postgres.postgres.database.azure.com
+      - POSTGRES_USER=postgresadmin
+      - POSTGRES_PASSWORD=wuFdyv-zorruk-gokni2
+      - POSTGRES_DB=census_db_updated
+      - POSTGRES_PORT=5432
+      - SECRET_KEY=your-secret-key-here-change-in-production
+      - MAIL_USERNAME=cses.enrollment@akcpk.org
+      - MAIL_PASSWORD=rrkeoyhjclzupxxi
+      - MAIL_FROM=cses.enrollment@akcpk.org
+      - MAIL_PORT=587
+      - MAIL_SERVER=smtp.gmail.com
+      - MAIL_FROM_NAME=Census System
+      - MAIL_STARTTLS=True
+      - MAIL_SSL_TLS=False
+      - USE_CREDENTIALS=True
+      - VALIDATE_CERTS=True
+    networks:
+      - jamatkhana_network
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:
+
+networks:
+  jamatkhana_network:
+    driver: bridge

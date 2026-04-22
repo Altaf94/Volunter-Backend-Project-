@@ -1,0 +1,63 @@
+# Docker
+# Build and push an image to Azure Container Registry
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  buildNumber: $(Build.DefinitionName)_$(Build.BuildId)
+  buildDate: $[format('{0:yyyyMMdd}', pipeline.startTime)]
+  fullBuildNumber: $(buildDate).$(Build.BuildId)
+  # Container registry service connection established during pipeline creation
+  dockerRegistryServiceConnection: 'a0bfad62-3dac-4f9f-92f5-a5c08acca1a3'
+  imageRepository: 'registrationbackend'
+  containerRegistry: 'aidify.azurecr.io'
+  dockerfilePath: '**/Dockerfile'
+  tag: 'regbackend-$(fullBuildNumber)'
+
+  # Azure Web App details
+  azureWebAppName: 'api-registration-pakistan'  # Replace with your Azure Web App name
+  azureResourceGroup: 'aidify'
+  azureRMServiceConnection: '677443a0-e1c9-4700-a927-a3f7f9a0173a'
+
+  # Agent VM image name
+  vmImageName: 'ubuntu-latest'
+
+stages:
+- stage: Build
+  displayName: Build and push stage
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - task: Docker@2
+      displayName: Build and push an image to container registry
+      inputs:
+        command: buildAndPush
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+
+- stage: Deploy
+  displayName: Deploy to Azure Web App
+  jobs:
+  - job: Deploy
+    displayName: Deploy to Azure Web App
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - task: AzureWebAppContainer@1
+      displayName: Deploy Docker image to Azure Web App
+      inputs:
+        azureSubscription: $(azureRMServiceConnection)
+        appName: $(azureWebAppName)
+        resourceGroupName: $(azureResourceGroup)
+        imageName: $(containerRegistry)/$(imageRepository):$(tag)
