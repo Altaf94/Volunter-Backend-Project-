@@ -44,18 +44,24 @@ MAIL_SSL_TLS = os.getenv("MAIL_SSL_TLS", "False").lower() == "true"
 USE_CREDENTIALS = os.getenv("USE_CREDENTIALS", "True").lower() == "true"
 VALIDATE_CERTS = os.getenv("VALIDATE_CERTS", "True").lower() == "true"
 
-EMAIL_CONFIG = ConnectionConfig(
-    MAIL_USERNAME=MAIL_USERNAME or "",
-    MAIL_PASSWORD=MAIL_PASSWORD or "",
-    MAIL_FROM=MAIL_FROM or "",
-    MAIL_PORT=MAIL_PORT,
-    MAIL_SERVER=MAIL_SERVER,
-    MAIL_FROM_NAME=MAIL_FROM_NAME,
-    MAIL_STARTTLS=MAIL_STARTTLS,
-    MAIL_SSL_TLS=MAIL_SSL_TLS,
-    USE_CREDENTIALS=USE_CREDENTIALS,
-    VALIDATE_CERTS=VALIDATE_CERTS,
-)
+def is_email_configured() -> bool:
+    return bool(MAIL_USERNAME and MAIL_PASSWORD and MAIL_FROM)
+
+if is_email_configured():
+    EMAIL_CONFIG = ConnectionConfig(
+        MAIL_USERNAME=MAIL_USERNAME,
+        MAIL_PASSWORD=MAIL_PASSWORD,
+        MAIL_FROM=MAIL_FROM,
+        MAIL_PORT=MAIL_PORT,
+        MAIL_SERVER=MAIL_SERVER,
+        MAIL_FROM_NAME=MAIL_FROM_NAME,
+        MAIL_STARTTLS=MAIL_STARTTLS,
+        MAIL_SSL_TLS=MAIL_SSL_TLS,
+        USE_CREDENTIALS=USE_CREDENTIALS,
+        VALIDATE_CERTS=VALIDATE_CERTS,
+    )
+else:
+    EMAIL_CONFIG = None
 
 DATABASE_URL = (
     f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
@@ -238,10 +244,6 @@ async def get_current_user(
 def generate_secure_password(length: int = 12) -> str:
     alphabet = string.ascii_letters + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
-
-
-def is_email_configured() -> bool:
-    return bool(MAIL_USERNAME and MAIL_PASSWORD and MAIL_FROM)
 
 
 async def send_seed_password_email(
