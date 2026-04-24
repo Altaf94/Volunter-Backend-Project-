@@ -182,11 +182,12 @@ CREATE TABLE roles (
         access_level_id INTEGER REFERENCES access_levels(id) ON DELETE SET NULL,
         duty_type_id INTEGER REFERENCES duty_types(id) ON DELETE SET NULL,
         record_status VARCHAR(20) NOT NULL CHECK (record_status IN ('maker','checker','printed')),
-        decision_status VARCHAR(50) NOT NULL CHECK (decision_status IN ('Rejected','Ok','Discrepant-1','Discrepant-2')),
+        decision_status VARCHAR(50) NOT NULL DEFAULT 'pending' CHECK (decision_status IN ('Rejected','Ok','Discrepant-1','Discrepant-2','pending')),
+        register VARCHAR(3) NOT NULL DEFAULT 'No' CHECK (register IN ('Yes','No')),
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         checker_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        printer_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+        import_id INTEGER REFERENCES import_file(id) ON DELETE SET NULL
     );
 
     CREATE INDEX idx_volunteer_record_cnic ON volunteer_record (cnic);

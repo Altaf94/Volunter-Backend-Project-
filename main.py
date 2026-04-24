@@ -68,6 +68,18 @@ DATABASE_URL = (
     f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 )
 
+# Census Database Configuration (for CNIC usage checks)
+CENSUS_HOST = os.getenv("CENSUS_HOST", "jamat-postgres.postgres.database.azure.com")
+CENSUS_USER = os.getenv("CENSUS_USER", "postgresadmin")
+CENSUS_PASSWORD = os.getenv("CENSUS_PASSWORD", "wuFdyv-zorruk-gokni2")
+CENSUS_DB = os.getenv("CENSUS_DB", "census_db_updated")
+CENSUS_PORT = os.getenv("CENSUS_PORT", "5432")
+
+CENSUS_DATABASE_URL = (
+    f"postgresql+asyncpg://{CENSUS_USER}:{CENSUS_PASSWORD}"
+    f"@{CENSUS_HOST}:{CENSUS_PORT}/{CENSUS_DB}"
+)
+
 app = FastAPI(title="JamatKhana API", version="1.0")
 
 app.add_middleware(
@@ -111,6 +123,17 @@ async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit
 volunteer_engine = engine
 volunteer_async_session = async_session
 
+# Census database engine
+census_engine = create_async_engine(
+    CENSUS_DATABASE_URL,
+    echo=True,
+    pool_size=20,
+    max_overflow=40,
+    pool_timeout=60,
+    pool_pre_ping=True,
+)
+census_async_session = async_sessionmaker(census_engine, class_=AsyncSession, expire_on_commit=False)
+
 
 async def get_db():
     async with async_session() as session:
@@ -119,6 +142,11 @@ async def get_db():
 
 async def get_volunteer_db():
     async with volunteer_async_session() as session:
+        yield session
+
+
+async def get_census_db():
+    async with census_async_session() as session:
         yield session
 
 
@@ -435,10 +463,12 @@ from volunteer_auth import router as volunteer_auth_router, set_database_depende
 import volunteer_api_v2
 
 set_auth_db_dep(get_volunteer_db)
-volunteer_api_v2.set_database_dependencies(get_volunteer_db, get_db)
+volunteer_api_v2.set_database_dependencies(get_volunteer_db, get_db, get_census_db)
 
 app.include_router(volunteer_auth_router)
 app.include_router(volunteer_api_v2.volunteer_router, dependencies=[Depends(get_current_user)])
+# Include the CNIC check router without authentication
+app.include_router(volunteer_api_v2.cnic_router)
 
 
 @app.get("/health")

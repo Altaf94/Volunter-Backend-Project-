@@ -161,3 +161,38 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
         pass
 
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+
+
+# Refresh token endpoint so frontend can call /api/volunteers/auth/refresh
+class TokenRefresh(BaseModel):
+    refresh_token: str
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(token_data: TokenRefresh, db: AsyncSession = Depends(get_db)):
+    try:
+        payload = jwt.decode(token_data.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=400, detail="Invalid token type")
+        email = payload.get("email")
+        if email is None:
+            raise HTTPException(status_code=400, detail="Invalid refresh token")
+
+        q = await db.execute(text("SELECT id, email, full_name, role_id, scope, region_id, is_active FROM users WHERE email = :email"), {"email": email})
+        row = q.first()
+        if not row:
+            raise HTTPException(status_code=400, detail="User not found")
+        user_id, email, full_name, role_id, scope, region_id, is_active = row
+        if not is_active:
+            raise HTTPException(status_code=401, detail="User account is inactive")
+
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        claims = {"sub": email, "id": user_id, "role": role_id, "name": full_name, "scope": scope, "region_id": region_id}
+        access_token = create_access_token(data=claims, expires_delta=access_token_expires)
+        refresh_token_val = create_refresh_token(data={"email": email, "id": user_id, "role": role_id, "name": full_name})
+
+        return {"access_token": access_token, "refresh_token": refresh_token_val, "token_type": "bearer"}
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token has expired")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")

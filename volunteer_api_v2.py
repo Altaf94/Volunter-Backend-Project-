@@ -5,10 +5,12 @@
 # ============================================
 
 import uuid
+import logging
 from datetime import datetime
 from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select, and_, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,8 +29,13 @@ from volunteer_schemas_v2 import (
 from sqlalchemy import text
 
 
+# Create logger
+logger = logging.getLogger(__name__)
+
+
 # Create router
 volunteer_router = APIRouter(prefix="/api", tags=["Volunteer Management"])
+cnic_router = APIRouter(prefix="/api", tags=["CNIC Verification"])
 
 
 # ============================================
@@ -37,13 +44,15 @@ volunteer_router = APIRouter(prefix="/api", tags=["Volunteer Management"])
 
 _get_volunteer_db = None
 _get_main_db = None
+_get_census_db = None
 
 
-def set_database_dependencies(volunteer_db_func, main_db_func):
+def set_database_dependencies(volunteer_db_func, main_db_func, census_db_func=None):
     """Set database dependency functions from main.py"""
-    global _get_volunteer_db, _get_main_db
+    global _get_volunteer_db, _get_main_db, _get_census_db
     _get_volunteer_db = volunteer_db_func
     _get_main_db = main_db_func
+    _get_census_db = census_db_func
 
 
 async def volunteer_db_session():
@@ -57,6 +66,17 @@ async def volunteer_db_session():
 async def main_db_session():
     """Get main database session (for CNIC validation)"""
     if _get_main_db is None:
+        raise RuntimeError("Main database not configured")
+    async for session in _get_main_db():
+        yield session
+
+
+async def census_db_session():
+    """Get census database session"""
+    if _get_census_db is None:
+        raise RuntimeError("Census database not configured")
+    async for session in _get_census_db():
+        yield session
         raise RuntimeError("Main database not configured")
     async for session in _get_main_db():
         yield session
@@ -804,9 +824,149 @@ async def get_event_access_level_duty_requirements(
 
 
 # ============================================
+# ============================================
+# QUERY BY USER / IMPORT
+
+
+class VolunteerRecordQuery(BaseModel):
+    userId: int = Field(..., alias="userId")
+
+
+@volunteer_router.post("/volunteers/by-import-or-user")
+async def get_volunteers_by_user_or_import(
+    query: VolunteerRecordQuery,
+    volunteer_db: AsyncSession = Depends(volunteer_db_session)
+):
+    """Return volunteer_record rows filtered by `checker_id` (userId).
+
+    Request body: { "userId": int }
+    Returns event, access level, and duty type names instead of IDs.
+    """
+    sql = """
+    SELECT 
+        vr.id, 
+        vr.record_number, 
+        vr.cnic, 
+        vr.name, 
+        vr.register,
+        e.name as event_name,
+        al.name as access_level_name,
+        dt.name as duty_type_name,
+        vr.record_status, 
+        vr.decision_status, 
+        vr.checker_id, 
+        vr.import_id, 
+        vr.created_at, 
+        vr.updated_at 
+    FROM volunteer_record vr
+    LEFT JOIN events e ON e.id = vr.event_id
+    LEFT JOIN access_levels al ON al.id = vr.access_level_id
+    LEFT JOIN duty_types dt ON dt.id = vr.duty_type_id
+    WHERE vr.checker_id = :userId
+    """
+    params = {"userId": query.userId}
+
+    stmt = text(sql)
+    result = await volunteer_db.execute(stmt, params)
+    rows = result.fetchall()
+
+    out = []
+    for r in rows:
+        m = r._mapping
+        out.append({
+            "id": m.get("id"),
+            "recordNumber": m.get("record_number"),
+            "cnic": m.get("cnic"),
+            "name": m.get("name"),
+            "register": m.get("register"),
+            "eventName": m.get("event_name"),
+            "accessLevelName": m.get("access_level_name"),
+            "dutyTypeName": m.get("duty_type_name"),
+            "recordStatus": m.get("record_status"),
+            "decisionStatus": m.get("decision_status"),
+            "checkerId": m.get("checker_id"),
+            "importId": m.get("import_id"),
+            "createdAt": m.get("created_at").isoformat() if m.get("created_at") else None,
+            "updatedAt": m.get("updated_at").isoformat() if m.get("updated_at") else None,
+        })
+
+    return out
+
+
+# ============================================
+# CNIC USAGE CHECK (Census Database)
+# ============================================
+
+class CNICBatchQuery(BaseModel):
+    cnics: List[str] = Field(..., description="List of CNICs to check")
+
+
+@cnic_router.post("/cnic-usage/batch")
+async def check_cnic_usage_batch(
+    query: CNICBatchQuery,
+    census_db: AsyncSession = Depends(census_db_session)
+):
+    """Check which CNICs are NOT found in census database.
+    
+    Checks both FamilyLevelDetails.IdNumber and form.HouseHoldCNIC tables.
+    Returns only CNICs that don't exist in either table.
+    
+    Request body: { "cnics": ["3710123456789", "3710987654321", ...] }
+    Response: { "notFound": ["3710123456789"], "found": ["3710987654321"] }
+    """
+    if not query.cnics:
+        return {"notFound": [], "found": []}
+    
+    # Normalize CNICs (remove dashes)
+    normalized_cnics = [cnic.replace("-", "").strip() for cnic in query.cnics]
+    
+    try:
+        # Check in FamilyLevelDetails table
+        family_sql = text("""
+            SELECT DISTINCT "IdNumber" 
+            FROM "FamilyLevelDetails"
+            WHERE "IdNumber" = ANY(:cnics)
+        """)
+        family_result = await census_db.execute(family_sql, {"cnics": normalized_cnics})
+        family_found = set(row[0] for row in family_result.fetchall())
+        
+        # Try to check in form table (may not exist)
+        form_found = set()
+        try:
+            form_sql = text("""
+                SELECT DISTINCT "HouseHoldCNIC"
+                FROM "form"
+                WHERE "HouseHoldCNIC" = ANY(:cnics)
+            """)
+            form_result = await census_db.execute(form_sql, {"cnics": normalized_cnics})
+            form_found = set(row[0] for row in form_result.fetchall())
+        except Exception as form_error:
+            logger.warning(f"Could not query form table: {str(form_error)}")
+        
+        # Combine all found CNICs
+        all_found = family_found.union(form_found)
+        
+        # Find CNICs not in either table
+        not_found = [cnic for cnic in normalized_cnics if cnic not in all_found]
+        found = [cnic for cnic in normalized_cnics if cnic in all_found]
+        
+        return {
+            "notFound": not_found,
+            "found": found,
+            "totalChecked": len(normalized_cnics),
+            "totalFound": len(found),
+            "totalNotFound": len(not_found)
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking CNIC usage: {str(e)}"
+        )
+
+
 # SINGLE VOLUNTEER RECORD INSERT
 # ============================================
-from pydantic import BaseModel, Field
 
 
 class VolunteerRecordCreate(BaseModel):
@@ -818,6 +978,9 @@ class VolunteerRecordCreate(BaseModel):
     event: Optional[Union[int, str]] = None
     access_level: Optional[Union[int, str]] = Field(None, alias="accessLevel")
     duty_type: Optional[Union[int, str]] = Field(None, alias="dutyType")
+    import_id: Optional[int] = Field(None, alias="importId")
+    decision_status: Optional[str] = Field("pending", alias="decisionStatus")
+    register: Optional[str] = Field(None, alias="register")
 
 
 @volunteer_router.post("/volunteers/record")
@@ -833,10 +996,10 @@ async def create_volunteer_record(
     insert_sql = text("""
         INSERT INTO volunteer_record
         (record_number, cnic, name, event_id, access_level_id, duty_type_id,
-         record_status, decision_status, checker_id, created_at, updated_at)
+         record_status, decision_status, register, checker_id, import_id, created_at, updated_at)
         VALUES
         (:record_number, :cnic, :name, :event_id, :access_level_id, :duty_type_id,
-         :record_status, :decision_status, :checker_id, :created_at, :updated_at)
+         :record_status, :decision_status, :register, :checker_id, :import_id, :created_at, :updated_at)
         RETURNING id
     """)
 
@@ -853,8 +1016,10 @@ async def create_volunteer_record(
         "access_level_id": access_level_id,
         "duty_type_id": duty_type_id,
         "record_status": "maker",
-        "decision_status": "Ok",
+        "decision_status": record.decision_status,
+        "register": record.register or "No",
         "checker_id": record.userId,
+        "import_id": record.import_id,
         "created_at": now,
         "updated_at": now
     }
@@ -872,72 +1037,255 @@ async def create_volunteer_record(
 @volunteer_router.post("/volunteers/records")
 async def create_volunteer_records(
     records: List[VolunteerRecordCreate],
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
+    volunteer_db: AsyncSession = Depends(volunteer_db_session),
+    census_db: AsyncSession = Depends(census_db_session)
 ):
-    """Bulk insert multiple volunteer records in one call. Accepts large lists (1000+ items).
-
-    Each item uses the same fields as the single-record endpoint. Nullable fields (e.g., dutyType)
-    are accepted and stored as NULL in the DB.
-    """
+    """Bulk insert multiple volunteer records in one call. Accepts large lists (1000+ items)."""
     now = datetime.utcnow()
     insert_sql = text("""
         INSERT INTO volunteer_record
         (record_number, cnic, name, event_id, access_level_id, duty_type_id,
-         record_status, decision_status, checker_id, created_at, updated_at)
+         record_status, decision_status, register, checker_id, import_id, created_at, updated_at)
         VALUES
         (:record_number, :cnic, :name, :event_id, :access_level_id, :duty_type_id,
-         :record_status, :decision_status, :checker_id, :created_at, :updated_at)
+         :record_status, :decision_status, :register, :checker_id, :import_id, :created_at, :updated_at)
         RETURNING id
     """)
-
     inserted_ids = []
     try:
-        # caches to avoid repeated DB lookups for the same names
+        # Resolve IDs caches
         event_cache = {}
         access_cache = {}
         duty_cache = {}
 
-        async with volunteer_db.begin():
-            for rec in records:
-                # resolve IDs (accept numeric or string names)
-                if rec.event in event_cache:
-                    event_id = event_cache[rec.event]
-                else:
-                    event_id = await _resolve_name_to_id(volunteer_db, "events", rec.event)
-                    event_cache[rec.event] = event_id
+        # Normalize CNICs and pre-check enrollment in census DB
+        cnics = [normalize_cnic(r.cnic or "") for r in records]
+        normalized_unique = list({c for c in cnics if c})
 
-                if rec.access_level in access_cache:
-                    access_level_id = access_cache[rec.access_level]
-                else:
-                    access_level_id = await _resolve_name_to_id(volunteer_db, "access_levels", rec.access_level)
-                    access_cache[rec.access_level] = access_level_id
+        family_sql = text("""
+            SELECT DISTINCT "IdNumber" 
+            FROM "FamilyLevelDetails"
+            WHERE "IdNumber" = ANY(:cnics)
+        """)
+        family_found = set()
+        try:
+            fam_res = await census_db.execute(family_sql, {"cnics": normalized_unique})
+            family_found = set(row[0] for row in fam_res.fetchall())
+        except Exception:
+            # census DB may not be available; treat as unknown (assume found=False)
+            family_found = set()
 
-                if rec.duty_type in duty_cache:
-                    duty_type_id = duty_cache[rec.duty_type]
-                else:
-                    duty_type_id = await _resolve_name_to_id(volunteer_db, "duty_types", rec.duty_type)
-                    duty_cache[rec.duty_type] = duty_type_id
+        form_found = set()
+        try:
+            form_sql = text("""
+                SELECT DISTINCT "HouseHoldCNIC"
+                FROM "form"
+                WHERE "HouseHoldCNIC" = ANY(:cnics)
+            """)
+            form_res = await census_db.execute(form_sql, {"cnics": normalized_unique})
+            form_found = set(row[0] for row in form_res.fetchall())
+        except Exception:
+            form_found = set()
 
-                params = {
-                    "record_number": rec.sno,
-                    "cnic": rec.cnic,
-                    "name": rec.name,
-                    "event_id": event_id,
-                    "access_level_id": access_level_id,
-                    "duty_type_id": duty_type_id,
-                    "record_status": "maker",
-                    "decision_status": "Ok",
-                    "checker_id": rec.userId,
-                    "created_at": now,
-                    "updated_at": now
-                }
-                result = await volunteer_db.execute(insert_sql, params)
-                inserted_id = result.scalar()
-                inserted_ids.append(inserted_id)
+        enrollment_found = family_found.union(form_found)
+
+        # Load existing volunteer_record rows for these CNICs
+        existing_rows = {}
+        if normalized_unique:
+            ex_sql = text("""
+                SELECT id, cnic, event_id, access_level_id, duty_type_id, record_status
+                FROM volunteer_record
+                WHERE replace(coalesce(cnic,''),'-','') = ANY(:cnics)
+            """)
+            ex_res = await volunteer_db.execute(ex_sql, {"cnics": normalized_unique})
+            for row in ex_res.fetchall():
+                cid = str(row[1]).replace('-', '') if row[1] else ''
+                existing_rows.setdefault(cid, []).append({
+                    "id": row[0],
+                    "event_id": row[2],
+                    "access_level_id": row[3],
+                    "duty_type_id": row[4],
+                    "record_status": row[5]
+                })
+
+        # Build combined view per CNIC to classify discrepant across events and within event
+        # First, resolve ids for incoming records
+        incoming = []
+        for idx, rec in enumerate(records):
+            # Resolve event/access/duty ids (cache)
+            if rec.event in event_cache:
+                event_id = event_cache[rec.event]
+            else:
+                event_id = await _resolve_name_to_id(volunteer_db, "events", rec.event)
+                event_cache[rec.event] = event_id
+
+            if rec.access_level in access_cache:
+                access_level_id = access_cache[rec.access_level]
+            else:
+                access_level_id = await _resolve_name_to_id(volunteer_db, "access_levels", rec.access_level)
+                access_cache[rec.access_level] = access_level_id
+
+            if rec.duty_type in duty_cache:
+                duty_type_id = duty_cache[rec.duty_type]
+            else:
+                duty_type_id = await _resolve_name_to_id(volunteer_db, "duty_types", rec.duty_type)
+                duty_cache[rec.duty_type] = duty_type_id
+
+            normalized = normalize_cnic(rec.cnic or "")
+            incoming.append({
+                "idx": idx,
+                "rec": rec,
+                "cnic_norm": normalized,
+                "event_id": event_id,
+                "access_level_id": access_level_id,
+                "duty_type_id": duty_type_id,
+                "decision_status": "pending",
+                "reason": None
+            })
+
+        # Group existing+incoming by CNIC and event to detect duplicates/discrepancies
+        by_cnic = {}
+        for inc in incoming:
+            c = inc["cnic_norm"]
+            by_cnic.setdefault(c, {"incoming": [], "existing": []})
+            by_cnic[c]["incoming"].append(inc)
+        for c, rows in existing_rows.items():
+            by_cnic.setdefault(c, {"incoming": [], "existing": []})
+            by_cnic[c]["existing"].extend(rows)
+
+        # Classification
+        for cnic, group in by_cnic.items():
+            incs = group["incoming"]
+            exs = group["existing"]
+
+            # If enrollment not found -> mark all incoming as Rejected
+            if cnic and cnic not in enrollment_found:
+                for inc in incs:
+                    inc["decision_status"] = "Rejected"
+                    inc["reason"] = "CNIC not found in enrollment"
+                continue
+
+            # Collect events present across existing and incoming
+            events_present = set([e["event_id"] for e in exs if e.get("event_id")])
+            events_present.update([i["event_id"] for i in incs if i.get("event_id")])
+
+            # If CNIC appears in multiple events (including existing rows) -> mark incoming in other events as Discrepant-2
+            if len(events_present) > 1:
+                # mark incoming records that are in events where other event exists as Discrepant-2
+                for inc in incs:
+                    # if there exists any existing record with different event_id OR another incoming with different event
+                    other_events = {e for e in events_present if e != inc["event_id"]}
+                    if other_events:
+                        inc["decision_status"] = "Discrepant-2"
+                        inc["reason"] = "Multiple duties across events"
+
+            # For each event, check duplicates and differing duties
+            # Build map of (event_id) -> set of (access_level_id,duty_type_id)
+            event_map = {}
+            for ex in exs:
+                k = ex.get("event_id")
+                event_map.setdefault(k, set()).add((ex.get("access_level_id"), ex.get("duty_type_id")))
+            for inc in incs:
+                k = inc.get("event_id")
+                event_map.setdefault(k, set()).add((inc.get("access_level_id"), inc.get("duty_type_id")))
+
+            for event_id, combos in event_map.items():
+                if len(combos) >= 2:
+                    # multiple different duties in same event -> mark one as Discrepant-1 and rest Discrepant-2
+                    # prefer existing as Discrepant-1 if present; otherwise first incoming becomes Discrepant-1
+                    # mark incoming ones appropriately
+                    # find incoming for this event
+                    incs_for_event = [i for i in incs if i["event_id"] == event_id]
+                    if not incs_for_event:
+                        continue
+                    # If any existing row exists for this event, mark first existing as Discrepant-1 and incoming as Discrepant-2
+                    ex_for_event = [e for e in exs if e.get("event_id") == event_id]
+                    if ex_for_event:
+                        # incoming -> Discrepant-2
+                        for inc in incs_for_event:
+                            # But if identical access/duty exists in existing -> it's a duplicate -> Reject
+                            same_exists = any((e.get("access_level_id"), e.get("duty_type_id")) == (inc.get("access_level_id"), inc.get("duty_type_id")) for e in ex_for_event)
+                            if same_exists:
+                                inc["decision_status"] = "Rejected"
+                                inc["reason"] = "Duplicate: same event and duty already exists"
+                            else:
+                                # Check if any existing printed -> reject
+                                if any(e.get("record_status") == "printed" for e in ex_for_event):
+                                    inc["decision_status"] = "Rejected"
+                                    inc["reason"] = "Existing printed badge prevents additional duty"
+                                else:
+                                    inc["decision_status"] = "Discrepant-2"
+                                    inc["reason"] = "Different duties in same event"
+                    else:
+                        # No existing rows; multiple incoming in same event with different duties
+                        # pick the first incoming as Discrepant-1, rest Discrepant-2
+                        sorted_inc = incs_for_event
+                        if sorted_inc:
+                            sorted_inc[0]["decision_status"] = "Discrepant-1"
+                            sorted_inc[0]["reason"] = "Multiple duties in same event"
+                        for inc in sorted_inc[1:]:
+                            inc["decision_status"] = "Discrepant-2"
+                            inc["reason"] = "Multiple duties in same event"
+
+            # Now check duplicates exact same event+access+duty against existing rows
+            for inc in incs:
+                if inc["decision_status"] != "pending":
+                    # already classified
+                    continue
+                ex_for_event = [e for e in exs if e.get("event_id") == inc["event_id"]]
+                if any((e.get("access_level_id"), e.get("duty_type_id")) == (inc.get("access_level_id"), inc.get("duty_type_id")) for e in ex_for_event):
+                    inc["decision_status"] = "Rejected"
+                    inc["reason"] = "Duplicate: same event and duty already exists"
+                else:
+                    # Also check if any existing printed in same event forbids additional duty
+                    if any(e.get("record_status") == "printed" for e in ex_for_event):
+                        inc["decision_status"] = "Rejected"
+                        inc["reason"] = "Existing printed badge prevents additional duty"
+                    else:
+                        # If still pending, mark Ok
+                        if inc["decision_status"] == "pending":
+                            inc["decision_status"] = "Ok"
+                            inc["reason"] = None
+
+        # Insert all incoming records with computed decision_status
+        for inc in incoming:
+            rec = inc["rec"]
+            params = {
+                "record_number": rec.sno,
+                "cnic": rec.cnic,
+                "name": rec.name,
+                "event_id": inc["event_id"],
+                "access_level_id": inc["access_level_id"],
+                "duty_type_id": inc["duty_type_id"],
+                "record_status": "maker",
+                "decision_status": inc["decision_status"],
+                "register": rec.register or "No",
+                "checker_id": rec.userId,
+                "import_id": rec.import_id,
+                "created_at": now,
+                "updated_at": now
+            }
+            result = await volunteer_db.execute(insert_sql, params)
+            inserted_id = result.scalar()
+            inserted_ids.append(inserted_id)
+
+        await volunteer_db.commit()
 
         return {"success": True, "inserted": len(inserted_ids), "ids": inserted_ids}
     except HTTPException:
+        await volunteer_db.rollback()
         raise
     except Exception as e:
-        # transaction rolled back automatically by session.begin() on exception
+        await volunteer_db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "success": True,
+        "totalProcessed": len(records),
+        "approved": len(approved_ids),
+        "discrepant1": len(discrepant_1_ids),
+        "discrepant2": len(discrepant_2_ids),
+        "approvedIds": approved_ids,
+        "discrepant1Ids": discrepant_1_ids,
+        "discrepant2Ids": discrepant_2_ids,
+    }
