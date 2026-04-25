@@ -6,10 +6,12 @@
 
 import uuid
 import logging
+import os
+import jwt
 from datetime import datetime
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, and_, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +29,7 @@ from volunteer_schemas_v2 import (
     DashboardStats, DashboardFilters, RegionStats, EventStats, AccessLevelStats
 )
 from sqlalchemy import text
+from error_logging import ErrorLogger, ErrorCode, ErrorSeverity
 
 
 # Create logger
@@ -1279,13 +1282,207 @@ async def create_volunteer_records(
         await volunteer_db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {
-        "success": True,
-        "totalProcessed": len(records),
-        "approved": len(approved_ids),
-        "discrepant1": len(discrepant_1_ids),
-        "discrepant2": len(discrepant_2_ids),
-        "approvedIds": approved_ids,
-        "discrepant1Ids": discrepant_1_ids,
-        "discrepant2Ids": discrepant_2_ids,
-    }
+
+# ============================================
+# MAKER DECISIONS
+# ============================================
+
+class MakerDecisionUpdate(BaseModel):
+    """Maker decision - matches exactly what the frontend sends"""
+    id: int = Field(..., description="Volunteer record ID")
+    recordNumber: int = Field(..., description="Record number")
+    cnic: str = Field(..., description="CNIC")
+    name: str = Field(..., description="Volunteer name")
+    register: str = Field(..., description="Register status")
+    eventName: str = Field(..., description="Event name")
+    accessLevelName: str = Field(..., description="Access level")
+    dutyTypeName: str = Field(..., description="Duty type")
+    recordStatus: str = Field(..., description="Current record status")
+    decisionStatus: str = Field(..., description="Decision status set by maker")
+    checkerId: int = Field(..., description="Checker ID")
+    importId: int = Field(..., description="Import ID")
+
+
+@volunteer_router.post("/volunteers/maker-decisions")
+async def update_maker_decisions(
+    request: Request,
+    decisions: List[MakerDecisionUpdate],
+    volunteer_db: AsyncSession = Depends(volunteer_db_session)
+):
+    """Update decision_status for volunteer records by maker.
+
+    Accepts array of {id, decisionStatus, reason, makerId}
+    Updates decision_status and updated_at in volunteer_record table.
+    Also inserts into maker_decisions table with full record details for checker review.
+    Any decision status is accepted from the maker.
+    """
+    # Extract maker_id from JWT token
+    maker_id = 0
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        try:
+            secret = os.getenv("SECRET_KEY", "your-secret-key-here")
+            payload = jwt.decode(token, secret, algorithms=["HS256"])
+            maker_id = payload.get("id", 0)
+        except Exception:
+            pass
+
+    now = datetime.utcnow()
+    updated_ids = []
+    request_id = str(uuid.uuid4())
+    
+    try:
+        for idx, decision in enumerate(decisions):
+            try:
+                # First, fetch current record details
+                fetch_sql = text("""
+                    SELECT record_number, cnic, name, event_id, access_level_id, duty_type_id,
+                           record_status, register, checker_id, import_id
+                    FROM volunteer_record
+                    WHERE id = :id
+                """)
+                result = await volunteer_db.execute(fetch_sql, {"id": decision.id})
+                record = result.fetchone()
+                
+                if not record:
+                    # Log volunteer not found
+                    await ErrorLogger.log_error(
+                        db=volunteer_db,
+                        code=ErrorCode.VOLUNTEER_NOT_FOUND,
+                        message=f"Volunteer record ID {decision.id} not found",
+                        status_code=404,
+                        severity=ErrorSeverity.WARNING,
+                        details={
+                            "volunteer_id": decision.id,
+                            "index": idx,
+                            "request_id": request_id
+                        },
+                        request_id=request_id
+                    )
+                    continue
+
+                # Validate decision status - REMOVED: Allow any decision status from maker
+                # valid_statuses = ["Ok", "Rejected", "Discrepant-1", "Discrepant-2"]
+                # if decision.decisionStatus not in valid_statuses:
+                #     await ErrorLogger.log_error(
+                #         db=volunteer_db,
+                #         code=ErrorCode.VALIDATION_ERROR,
+                #         message=f"Invalid decision status: {decision.decisionStatus}",
+                #         status_code=400,
+                #         severity=ErrorSeverity.ERROR,
+                #         details={
+                #             "volunteer_id": decision.id,
+                #             "status_provided": decision.decisionStatus,
+                #             "valid_statuses": valid_statuses,
+                #             "request_id": request_id
+                #         },
+                #         request_id=request_id
+                #     )
+                #     continue
+
+                # DO NOT update volunteer_record — the decision_status in volunteer_record
+                # was set during upload (Ok/Rejected/Discrepant-1/Discrepant-2/pending)
+                # and must not be changed by the maker's action.
+                # Only insert into maker_decisions as an audit/decision record.
+                insert_sql = text("""
+                    INSERT INTO maker_decisions
+                    (volunteer_record_id, maker_id, decision_status, reason,
+                     record_number, cnic, name, event_id, access_level_id, duty_type_id,
+                     record_status, register, checker_id, import_id, created_at, updated_at)
+                    VALUES
+                    (:volunteer_record_id, :maker_id, :decision_status, :reason,
+                     :record_number, :cnic, :name, :event_id, :access_level_id, :duty_type_id,
+                     :record_status, :register, :checker_id, :import_id, :created_at, :updated_at)
+                """)
+                insert_params = {
+                    "volunteer_record_id": decision.id,
+                    "maker_id": maker_id,
+                    "decision_status": decision.decisionStatus,
+                    "reason": None,
+                    "record_number": record[0],
+                    "cnic": record[1],
+                    "name": record[2],
+                    "event_id": record[3],
+                    "access_level_id": record[4],
+                    "duty_type_id": record[5],
+                    "record_status": record[6],
+                    "register": record[7],
+                    "checker_id": record[8],
+                    "import_id": record[9],
+                    "created_at": now,
+                    "updated_at": now
+                }
+                await volunteer_db.execute(insert_sql, insert_params)
+                updated_ids.append(decision.id)
+
+                # Log successful decision
+                logger.info(
+                    f"[{request_id}] Maker decision recorded for volunteer {decision.id}",
+                    extra={
+                        "volunteer_id": decision.id,
+                        "decision_status": decision.decisionStatus,
+                        "maker_id": decision.makerId,
+                        "request_id": request_id
+                    }
+                )
+                
+            except Exception as e:
+                # Log individual record processing error
+                await ErrorLogger.log_error(
+                    db=volunteer_db,
+                    code=ErrorCode.DB_INSERT_FAILED,
+                    message=f"Failed to process decision for volunteer {decision.id}: {str(e)}",
+                    status_code=500,
+                    severity=ErrorSeverity.ERROR,
+                    details={
+                        "volunteer_id": decision.id,
+                        "error": str(e),
+                        "index": idx,
+                        "request_id": request_id
+                    },
+                    request_id=request_id
+                )
+                logger.exception(f"[{request_id}] Error processing decision for volunteer {decision.id}")
+
+        await volunteer_db.commit()
+        
+        # Log batch success
+        logger.info(
+            f"[{request_id}] Batch decisions processed successfully",
+            extra={
+                "total_records": len(decisions),
+                "updated_count": len(updated_ids),
+                "request_id": request_id
+            }
+        )
+
+        return {
+            "success": True,
+            "updated": len(updated_ids),
+            "updatedIds": updated_ids,
+            "requestId": request_id
+        }
+        
+    except Exception as e:
+        await volunteer_db.rollback()
+        
+        # Log batch processing error
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.DB_QUERY_FAILED,
+            message=f"Batch decision processing failed: {str(e)}",
+            status_code=500,
+            severity=ErrorSeverity.CRITICAL,
+            details={
+                "total_records": len(decisions),
+                "error": str(e),
+                "request_id": request_id
+            },
+            request_id=request_id
+        )
+        
+        raise HTTPException(
+            status_code=500,
+            detail=f"Batch processing failed. Request ID: {request_id}"
+        )

@@ -17,16 +17,20 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+# Import logging configuration
+from logging_config import setup_logging
+
 load_dotenv()
+
+# Initialize logging
+setup_logging()
+logger = logging.getLogger(__name__)
 
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "northenvolunteerdb")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
 ALGORITHM = "HS256"
