@@ -100,7 +100,9 @@ CENSUS_DATABASE_URL = (
     f"@{CENSUS_HOST}:{CENSUS_PORT}/{CENSUS_DB}"
 )
 
-# Comma-separated extra origins, e.g. on Heroku: CORS_ORIGINS=https://myapp.vercel.app
+# Browser origins allowed to call this API. CRA (`npm start`) is :3000 — local FastAPI
+# (e.g. :8001) is not an "origin" for CORS. When the built UI and API are on different
+# hosts, add the UI origin(s) in CORS_ORIGINS (e.g. on Heroku: your Vercel/Netlify URL).
 _cors_base = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
