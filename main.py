@@ -2,23 +2,29 @@ import logging
 import os
 import secrets
 import string
+import time
+import uuid
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Optional
 
 import jwt
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Import logging configuration
 from logging_config import setup_logging
+from error_logging import ErrorCode, ErrorLogger, ErrorSeverity
 
 load_dotenv()
 
@@ -67,10 +73,20 @@ if is_email_configured():
 else:
     EMAIL_CONFIG = None
 
-DATABASE_URL = (
-    f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
-    f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-)
+# Heroku sets DATABASE_URL (postgres://). Local dev uses POSTGRES_* in .env.
+if os.getenv("DATABASE_URL"):
+    _raw = os.getenv("DATABASE_URL", "").strip()
+    if _raw.startswith("postgres://"):
+        DATABASE_URL = _raw.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif _raw.startswith("postgresql://") and "+asyncpg" not in _raw:
+        DATABASE_URL = _raw.replace("postgresql://", "postgresql+asyncpg://", 1)
+    else:
+        DATABASE_URL = _raw
+else:
+    DATABASE_URL = (
+        f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
+        f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+    )
 
 # Census Database Configuration (for CNIC usage checks)
 CENSUS_HOST = os.getenv("CENSUS_HOST", "jamat-postgres.postgres.database.azure.com")
@@ -92,7 +108,152 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
+
+
+# ============================================
+# REQUEST LOGGING + REQUEST ID MIDDLEWARE
+# Every incoming request gets a unique request_id which is:
+#   - written to request.state.request_id (so endpoints can read it)
+#   - returned in the X-Request-ID response header
+#   - included in the access log line
+# Any uncaught exception is logged via ErrorLogger and returned as a
+# structured JSON error so the frontend can display the same code/id
+# the support team has on file.
+# ============================================
+
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Reuse caller-supplied id when present (helps cross-service tracing).
+        incoming_id = request.headers.get("x-request-id")
+        request_id = incoming_id or str(uuid.uuid4())
+        request.state.request_id = request_id
+
+        start = time.perf_counter()
+        client_host = request.client.host if request.client else "-"
+        logger.info(
+            f"[{request_id}] --> {request.method} {request.url.path} from {client_host}"
+        )
+
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.exception(
+                f"[{request_id}] !! {request.method} {request.url.path} crashed after {elapsed_ms:.1f}ms"
+            )
+            # Best-effort persistence of the unhandled error.
+            try:
+                async with async_session() as session:
+                    await ErrorLogger.log_error(
+                        db=session,
+                        code=ErrorCode.UNHANDLED_EXCEPTION,
+                        message=f"Unhandled exception: {type(exc).__name__}: {exc}",
+                        status_code=500,
+                        severity=ErrorSeverity.CRITICAL,
+                        details={
+                            "path": request.url.path,
+                            "method": request.method,
+                        },
+                        request_id=request_id,
+                        request=request,
+                        exc=exc,
+                    )
+            except Exception:
+                logger.exception(f"[{request_id}] failed to persist unhandled exception")
+
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "errorCode": ErrorCode.UNHANDLED_EXCEPTION.value,
+                    "message": "An unexpected error occurred. Please contact support with the request id.",
+                    "requestId": request_id,
+                },
+                headers={"X-Request-ID": request_id},
+            )
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        response.headers["X-Request-ID"] = request_id
+        logger.info(
+            f"[{request_id}] <-- {request.method} {request.url.path} "
+            f"status={response.status_code} time={elapsed_ms:.1f}ms"
+        )
+        return response
+
+
+app.add_middleware(RequestContextMiddleware)
+
+
+# ============================================
+# GLOBAL EXCEPTION HANDLERS
+# ============================================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    request_id = getattr(request.state, "request_id", None)
+
+    # If endpoints raise HTTPException(detail={"errorCode": ...}) the body
+    # is already structured - just enrich and pass it through.
+    if isinstance(exc.detail, dict):
+        body = dict(exc.detail)
+        body.setdefault("requestId", request_id)
+        body.setdefault("message", body.get("message") or "Request failed")
+        body.setdefault("errorCode", body.get("errorCode") or "INTERNAL_ERROR")
+    else:
+        body = {
+            "errorCode": "HTTP_" + str(exc.status_code),
+            "message": str(exc.detail) if exc.detail else "Request failed",
+            "requestId": request_id,
+        }
+
+    # 4xx -> warning, 5xx -> error in the file logs.
+    log_level = logging.WARNING if exc.status_code < 500 else logging.ERROR
+    logger.log(
+        log_level,
+        f"[{request_id}] HTTPException {exc.status_code} on {request.method} {request.url.path}: {body.get('message')}",
+    )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=body,
+        headers={"X-Request-ID": request_id} if request_id else None,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    request_id = getattr(request.state, "request_id", None)
+    logger.warning(
+        f"[{request_id}] Validation failed on {request.method} {request.url.path}: {exc.errors()}"
+    )
+    # Best-effort log to DB.
+    try:
+        async with async_session() as session:
+            await ErrorLogger.log_error(
+                db=session,
+                code=ErrorCode.VALIDATION_ERROR,
+                message="Request validation failed",
+                status_code=422,
+                severity=ErrorSeverity.WARNING,
+                details={"errors": exc.errors(), "path": request.url.path},
+                request_id=request_id,
+                request=request,
+            )
+    except Exception:
+        logger.exception(f"[{request_id}] failed to persist validation error")
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "errorCode": ErrorCode.VALIDATION_ERROR.value,
+            "message": "Request validation failed",
+            "requestId": request_id,
+            "errors": exc.errors(),
+        },
+        headers={"X-Request-ID": request_id} if request_id else None,
+    )
+
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -114,8 +275,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+_heroku = os.environ.get("DYNO") is not None
 engine = create_async_engine(
     DATABASE_URL,
+    connect_args=({"ssl": True} if _heroku and os.getenv("DATABASE_URL") else {}),
     echo=True,
     pool_size=20,
     max_overflow=40,
@@ -312,14 +475,51 @@ async def send_seed_password_email(
 
 @app.post("/login", response_model=Token)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_volunteer_db),
 ):
+    request_id = getattr(request.state, "request_id", None)
     user = await authenticate_user(db, form_data.username, form_data.password)
     if not user:
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
+        await ErrorLogger.log_error(
+            db=db,
+            code=ErrorCode.INVALID_CREDENTIALS,
+            message="Incorrect email or password",
+            status_code=400,
+            severity=ErrorSeverity.WARNING,
+            details={"email": form_data.username},
+            request_id=request_id,
+            request=request,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "errorCode": ErrorCode.INVALID_CREDENTIALS.value,
+                "message": "Incorrect email or password",
+                "requestId": request_id,
+            },
+        )
     if not user.IsActive:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive")
+        await ErrorLogger.log_error(
+            db=db,
+            code=ErrorCode.ACCOUNT_INACTIVE,
+            message="User account is inactive",
+            status_code=401,
+            severity=ErrorSeverity.WARNING,
+            details={"email": form_data.username, "user_id": user.Id},
+            request_id=request_id,
+            user_id=user.Id,
+            request=request,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "errorCode": ErrorCode.ACCOUNT_INACTIVE.value,
+                "message": "User account is inactive",
+                "requestId": request_id,
+            },
+        )
 
     role_name = await _resolve_role_name(db, user.RoleId)
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -355,12 +555,52 @@ async def login(
 
 
 @app.post("/login-json", response_model=Token)
-async def login_json(payload: LoginRequest, db: AsyncSession = Depends(get_volunteer_db)):
+async def login_json(
+    request: Request,
+    payload: LoginRequest,
+    db: AsyncSession = Depends(get_volunteer_db),
+):
+    request_id = getattr(request.state, "request_id", None)
     row = await _get_user_row_by_email(db, payload.email)
     if not row or not verify_password(payload.password, row.get("password_hash")):
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
+        await ErrorLogger.log_error(
+            db=db,
+            code=ErrorCode.INVALID_CREDENTIALS,
+            message="Incorrect email or password",
+            status_code=400,
+            severity=ErrorSeverity.WARNING,
+            details={"email": payload.email, "user_exists": bool(row)},
+            request_id=request_id,
+            request=request,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "errorCode": ErrorCode.INVALID_CREDENTIALS.value,
+                "message": "Incorrect email or password",
+                "requestId": request_id,
+            },
+        )
     if not row.get("is_active"):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive")
+        await ErrorLogger.log_error(
+            db=db,
+            code=ErrorCode.ACCOUNT_INACTIVE,
+            message="User account is inactive",
+            status_code=401,
+            severity=ErrorSeverity.WARNING,
+            details={"email": payload.email, "user_id": row.get("id")},
+            request_id=request_id,
+            user_id=row.get("id"),
+            request=request,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "errorCode": ErrorCode.ACCOUNT_INACTIVE.value,
+                "message": "User account is inactive",
+                "requestId": request_id,
+            },
+        )
 
     now = datetime.utcnow()
     user_id = row.get("id")
@@ -407,22 +647,72 @@ async def login_json(payload: LoginRequest, db: AsyncSession = Depends(get_volun
 
 @app.post("/refresh", response_model=Token)
 async def refresh_token(
+    request: Request,
     token_data: TokenRefresh,
     db: AsyncSession = Depends(get_volunteer_db),
 ):
+    request_id = getattr(request.state, "request_id", None)
     try:
         payload = jwt.decode(token_data.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
         if payload.get("type") != "refresh":
-            raise HTTPException(status_code=400, detail="Invalid token type")
+            await ErrorLogger.log_error(
+                db=db,
+                code=ErrorCode.TOKEN_INVALID,
+                message="Refresh failed: invalid token type",
+                status_code=400,
+                severity=ErrorSeverity.WARNING,
+                details={"token_type": payload.get("type")},
+                request_id=request_id,
+                request=request,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "errorCode": ErrorCode.TOKEN_INVALID.value,
+                    "message": "Invalid token type",
+                    "requestId": request_id,
+                },
+            )
         email = payload.get("email")
         if email is None:
-            raise HTTPException(status_code=400, detail="Invalid refresh token")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "errorCode": ErrorCode.TOKEN_INVALID.value,
+                    "message": "Invalid refresh token",
+                    "requestId": request_id,
+                },
+            )
 
         row = await _get_user_row_by_email(db, email)
         if row is None:
-            raise HTTPException(status_code=400, detail="User not found")
+            await ErrorLogger.log_error(
+                db=db,
+                code=ErrorCode.USER_NOT_FOUND,
+                message="Refresh failed: user not found",
+                status_code=400,
+                severity=ErrorSeverity.WARNING,
+                details={"email": email},
+                request_id=request_id,
+                request=request,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "errorCode": ErrorCode.USER_NOT_FOUND.value,
+                    "message": "User not found",
+                    "requestId": request_id,
+                },
+            )
         if not row.get("is_active"):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account is inactive")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "errorCode": ErrorCode.ACCOUNT_INACTIVE.value,
+                    "message": "User account is inactive",
+                    "requestId": request_id,
+                },
+            )
 
         role_id = row.get("role_id")
         role_name = await _resolve_role_name(db, role_id)
@@ -458,21 +748,61 @@ async def refresh_token(
             "expiry": ACCESS_TOKEN_EXPIRE_MINUTES,
         }
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Refresh token has expired")
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        await ErrorLogger.log_error(
+            db=db,
+            code=ErrorCode.TOKEN_EXPIRED,
+            message="Refresh token has expired",
+            status_code=401,
+            severity=ErrorSeverity.WARNING,
+            request_id=request_id,
+            request=request,
+        )
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "errorCode": ErrorCode.TOKEN_EXPIRED.value,
+                "message": "Refresh token has expired",
+                "requestId": request_id,
+            },
+        )
+    except jwt.PyJWTError as exc:
+        await ErrorLogger.log_error(
+            db=db,
+            code=ErrorCode.TOKEN_INVALID,
+            message=f"Invalid refresh token: {exc}",
+            status_code=401,
+            severity=ErrorSeverity.WARNING,
+            request_id=request_id,
+            request=request,
+            exc=exc,
+        )
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "errorCode": ErrorCode.TOKEN_INVALID.value,
+                "message": "Invalid refresh token",
+                "requestId": request_id,
+            },
+        )
 
 
 from volunteer_auth import router as volunteer_auth_router, set_database_dependency as set_auth_db_dep
 import volunteer_api_v2
+from error_admin_routes import (
+    admin_error_router,
+    set_database_dependency as set_admin_error_db_dep,
+)
 
 set_auth_db_dep(get_volunteer_db)
 volunteer_api_v2.set_database_dependencies(get_volunteer_db, get_db, get_census_db)
+set_admin_error_db_dep(get_volunteer_db)
 
 app.include_router(volunteer_auth_router)
 app.include_router(volunteer_api_v2.volunteer_router, dependencies=[Depends(get_current_user)])
 # Include the CNIC check router without authentication
 app.include_router(volunteer_api_v2.cnic_router)
+# Admin / support endpoints (require authentication).
+app.include_router(admin_error_router, dependencies=[Depends(get_current_user)])
 
 
 @app.get("/health")

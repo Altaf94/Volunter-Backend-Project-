@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from sqlalchemy import func, select, and_, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,11 +29,35 @@ from volunteer_schemas_v2 import (
     DashboardStats, DashboardFilters, RegionStats, EventStats, AccessLevelStats
 )
 from sqlalchemy import text
-from error_logging import ErrorLogger, ErrorCode, ErrorSeverity
+from error_logging import ErrorLogger, ErrorCode, ErrorSeverity, log_and_raise_error
 
 
 # Create logger
 logger = logging.getLogger(__name__)
+
+
+def _request_id(request: Optional[Request]) -> str:
+    """Read the request_id set by RequestContextMiddleware (with fallback)."""
+    if request is None:
+        return str(uuid.uuid4())
+    rid = getattr(request.state, "request_id", None) if hasattr(request, "state") else None
+    return rid or str(uuid.uuid4())
+
+
+def _user_id_from_request(request: Optional[Request]) -> Optional[int]:
+    """Best-effort extraction of authenticated user id from a Bearer JWT."""
+    if request is None:
+        return None
+    auth_header = request.headers.get("Authorization", "") if hasattr(request, "headers") else ""
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header[7:]
+    try:
+        secret = os.getenv("SECRET_KEY", "your-secret-key-here")
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        return payload.get("id")
+    except Exception:
+        return None
 
 
 # Create router
@@ -79,9 +103,6 @@ async def census_db_session():
     if _get_census_db is None:
         raise RuntimeError("Census database not configured")
     async for session in _get_census_db():
-        yield session
-        raise RuntimeError("Main database not configured")
-    async for session in _get_main_db():
         yield session
 
 
@@ -144,421 +165,40 @@ def get_duty_type_id(duty_type: str) -> str:
 # CNIC VALIDATION (Uses Main Enrollment DB)
 # ============================================
 
-@volunteer_router.post("/enrollment/validate/{cnic}", response_model=CNICValidationResponse)
-async def validate_cnic(
-    cnic: str,
-    main_db: AsyncSession = Depends(main_db_session)
-):
-    """
-    Validate CNIC against enrollment/census database.
-    Returns whether CNIC is registered and the person's name.
-    """
-    return CNICValidationResponse(
-        is_valid=False,
-        is_registered=False,
-        name=None,
-        message="Enrollment validation is unavailable in volunteer-only mode"
-    )
-
-
-@volunteer_router.post("/enrollment/validate-batch")
-async def validate_cnic_batch(
-    cnics: List[str],
-    main_db: AsyncSession = Depends(main_db_session)
-):
-    """
-    Batch validate CNICs against enrollment database.
-    Returns dict of CNIC -> {isValid, isRegistered, name}
-    """
-    results = {}
-
-    for cnic in cnics:
-        results[cnic] = {
-            "isValid": False,
-            "isRegistered": False,
-            "name": None,
-            "message": "Enrollment validation is unavailable in volunteer-only mode",
-        }
-
-    return results
-
-
-# ============================================
-# VOLUNTEER UPLOAD & VALIDATION
-# ============================================
-
-# In-memory storage (replace with actual database)
-# For now using simple dict - will be replaced with SQLAlchemy models
-_volunteers_db = {}
-_batches_db = {}
-
-
-@volunteer_router.post("/volunteers/upload", response_model=UploadBatchResponse)
-async def upload_volunteers(
-    upload: VolunteerBulkUpload,
-    volunteer_db: AsyncSession = Depends(volunteer_db_session),
-    main_db: AsyncSession = Depends(main_db_session)
-):
-    """
-    Upload volunteers from Excel file.
-    Performs validation:
-    1. Validate CNIC against enrollment database
-    2. Check for duplicates (same CNIC + same event + same duty)
-    3. Check for discrepancies (same CNIC, different duties in same event)
-    4. Check for multiple events (same CNIC across different events)
-    """
-    batch_id = generate_batch_id()
-    now = datetime.utcnow()
-    
-    # Create batch record
-    batch = {
-        "id": batch_id,
-        "fileName": upload.file_name,
-        "region": upload.region,
-        "uploadedBy": "current-user",  # TODO: Get from auth
-        "uploadedByName": "Current User",
-        "totalRecords": len(upload.volunteers),
-        "validRecords": 0,
-        "rejectedRecords": 0,
-        "discrepantRecords": 0,
-        "status": "processing",
-        "source": upload.source,
-        "sourceEntityId": upload.source_entity_id,
-        "sourceEntityName": upload.source_entity_name,
-        "createdAt": now,
-        "processedAt": None
-    }
-    
-    valid_volunteers = []
-    rejected_volunteers = []
-    discrepant_volunteers = []
-    
-    # Get all CNICs for batch validation
-    all_cnics = [row.cnic for row in upload.volunteers]
-    
-    # Batch validate CNICs - mark all as valid for now
-    cnic_validation = {}
-    
-    for cnic in all_cnics:
-        # Simple CNIC format validation
-        normalized = normalize_cnic(cnic)
-        # Accept any CNIC that normalizes correctly
-        cnic_validation[cnic] = {"valid": True, "name": None}
-    
-    # Track volunteers by CNIC for duplicate/discrepancy detection
-    cnic_records = {}  # cnic -> list of (event_number, duty_type, volunteer_id)
-    
-    # First pass: Load existing volunteers with same CNICs from database
-    # TODO: Query actual database for existing records
-    
-    # Process each row
-    for row in upload.volunteers:
-        normalized_cnic = normalize_cnic(row.cnic)
-        event_id = get_event_id(row.event_number)
-        duty_type_id = get_duty_type_id(row.duty_type)
-        access_level = row.access_level or get_access_level_for_duty(row.duty_type)
-        band_color = get_band_color(access_level)
-        
-        volunteer_id = generate_volunteer_id()
-        
-        volunteer = {
-            "id": f"vol-{uuid.uuid4().hex[:8]}",
-            "volunteerId": volunteer_id,
-            "cnic": row.cnic,
-            "name": row.name,
-            "eventId": event_id,
-            "eventNumber": row.event_number,
-            "dutyTypeId": duty_type_id,
-            "dutyTypeName": row.duty_type,
-            "accessLevel": access_level,
-            "accessLevelName": ACCESS_LEVEL_NAMES.get(access_level, f"Level {access_level}"),
-            "region": upload.region,
-            "source": upload.source,
-            "sourceEntityId": upload.source_entity_id,
-            "sourceEntityName": upload.source_entity_name,
-            "uploadBatchId": batch_id,
-            "status": VolunteerStatus.PENDING,
-            "validationErrors": [],
-            "printStatus": PrintStatus.NOT_PRINTED,
-            "cnicVerified": False,
-            "createdAt": now
-        }
-        
-        errors = []
-        
-        # 1. Check CNIC validation
-        cnic_check = cnic_validation.get(row.cnic, {"valid": False})
-        if not cnic_check["valid"]:
-            errors.append(ValidationResult(
-                is_valid=False,
-                error_type=ValidationError.CNIC_NOT_FOUND,
-                error_message="CNIC not found in enrollment database"
-            ))
-            volunteer["status"] = VolunteerStatus.REJECTED
-            volunteer["validationErrors"] = errors
-            rejected_volunteers.append(volunteer)
-            continue
-        else:
-            volunteer["cnicVerified"] = True
-        
-        # 2. Check for duplicates and discrepancies
-        if normalized_cnic in cnic_records:
-            existing = cnic_records[normalized_cnic]
-            
-            for prev_event, prev_duty, prev_id in existing:
-                if prev_event == row.event_number and prev_duty == row.duty_type:
-                    # Exact duplicate - same CNIC, same event, same duty
-                    errors.append(ValidationResult(
-                        is_valid=False,
-                        error_type=ValidationError.DUPLICATE_SAME_DUTY,
-                        error_message="Duplicate: Same CNIC, event, and duty type already exists",
-                        conflicting_records=[prev_id]
-                    ))
-                    volunteer["status"] = VolunteerStatus.REJECTED
-                    break
-                elif prev_event == row.event_number and prev_duty != row.duty_type:
-                    # Discrepant - same CNIC, same event, different duty
-                    errors.append(ValidationResult(
-                        is_valid=False,
-                        error_type=ValidationError.DISCREPANT_DIFFERENT_DUTIES,
-                        error_message="Discrepant: Same CNIC with different duties in same event",
-                        conflicting_records=[prev_id]
-                    ))
-                    volunteer["status"] = VolunteerStatus.DISCREPANT
-                elif prev_event != row.event_number:
-                    # Multiple events - same CNIC, different events
-                    errors.append(ValidationResult(
-                        is_valid=False,
-                        error_type=ValidationError.DISCREPANT_MULTIPLE_EVENTS,
-                        error_message="Discrepant: Same CNIC appears in multiple events",
-                        conflicting_records=[prev_id]
-                    ))
-                    volunteer["status"] = VolunteerStatus.DISCREPANT
-        
-        volunteer["validationErrors"] = errors
-        
-        # Track this volunteer
-        if normalized_cnic not in cnic_records:
-            cnic_records[normalized_cnic] = []
-        cnic_records[normalized_cnic].append((row.event_number, row.duty_type, volunteer["id"]))
-        
-        # Categorize result
-        if volunteer["status"] == VolunteerStatus.REJECTED:
-            rejected_volunteers.append(volunteer)
-        elif volunteer["status"] == VolunteerStatus.DISCREPANT:
-            discrepant_volunteers.append(volunteer)
-        else:
-            volunteer["status"] = VolunteerStatus.VALID
-            valid_volunteers.append(volunteer)
-        
-        # Store volunteer
-        _volunteers_db[volunteer["id"]] = volunteer
-    
-    # Update batch counts
-    batch["validRecords"] = len(valid_volunteers)
-    batch["rejectedRecords"] = len(rejected_volunteers)
-    batch["discrepantRecords"] = len(discrepant_volunteers)
-    batch["status"] = "completed"
-    batch["processedAt"] = datetime.utcnow()
-    
-    _batches_db[batch_id] = batch
-    
-@volunteer_router.get("/volunteers/validation/{batch_id}", response_model=BulkValidationResult)
-async def get_validation_results(
-    batch_id: str,
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
-):
-    """Get validation results for a batch"""
-    if batch_id not in _batches_db:
-        raise HTTPException(status_code=404, detail="Batch not found")
-    
-    batch_volunteers = [v for v in _volunteers_db.values() if v.get("uploadBatchId") == batch_id]
-    
-    valid = [v for v in batch_volunteers if v["status"] == VolunteerStatus.VALID]
-    rejected = [v for v in batch_volunteers if v["status"] == VolunteerStatus.REJECTED]
-    discrepant = [v for v in batch_volunteers if v["status"] == VolunteerStatus.DISCREPANT]
-    
-    return BulkValidationResult(
-        batch_id=batch_id,
-        total_records=len(batch_volunteers),
-        valid_records=valid,
-        rejected_records=rejected,
-        discrepant_records=discrepant
-    )
-
-
-# ============================================
-# VOLUNTEER CRUD
-# ============================================
-
-@volunteer_router.get("/volunteers", response_model=VolunteersResponse)
-async def get_volunteers(
-    region: Optional[Region] = Query(None),
-    status: Optional[VolunteerStatus] = Query(None),
-    event_id: Optional[str] = Query(None, alias="eventId"),
-    access_level: Optional[int] = Query(None, alias="accessLevel"),
-    cnic: Optional[str] = Query(None),
-    name: Optional[str] = Query(None),
-    batch_id: Optional[str] = Query(None, alias="batchId"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100, alias="pageSize"),
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
-):
-    """Get paginated list of volunteers with filters"""
-    # Filter volunteers
-    filtered = list(_volunteers_db.values())
-    
-    if region:
-        filtered = [v for v in filtered if v.get("region") == region]
-    if status:
-        filtered = [v for v in filtered if v.get("status") == status]
-    if event_id:
-        filtered = [v for v in filtered if v.get("eventId") == event_id]
-    if access_level:
-        filtered = [v for v in filtered if v.get("accessLevel") == access_level]
-    if cnic:
-        filtered = [v for v in filtered if cnic in v.get("cnic", "")]
-    if name:
-        filtered = [v for v in filtered if name.lower() in v.get("name", "").lower()]
-    if batch_id:
-        filtered = [v for v in filtered if v.get("uploadBatchId") == batch_id]
-    
-    # Paginate
-    total = len(filtered)
-    total_pages = (total + page_size - 1) // page_size
-    start = (page - 1) * page_size
-    end = start + page_size
-    page_data = filtered[start:end]
-    
-    return VolunteersResponse(
-        data=page_data,
-        pagination=Pagination(
-            total=total,
-            page=page,
-            page_size=page_size,
-            total_pages=total_pages,
-            has_next=page < total_pages,
-            has_previous=page > 1
-        )
-    )
-
-
-@volunteer_router.get("/volunteers/{volunteer_id}", response_model=VolunteerResponse)
-async def get_volunteer(
-    volunteer_id: str,
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
-):
-    """Get a specific volunteer"""
-    volunteer = _volunteers_db.get(volunteer_id)
-    if not volunteer:
-        raise HTTPException(status_code=404, detail="Volunteer not found")
-    return volunteer
-
-
-@volunteer_router.get("/volunteers/cnic/{cnic}")
-async def get_volunteers_by_cnic(
-    cnic: str,
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
-):
-    """Get all volunteers with a specific CNIC"""
-    normalized = normalize_cnic(cnic)
-    matches = [v for v in _volunteers_db.values() 
-               if normalize_cnic(v.get("cnic", "")) == normalized]
-    return matches
-
-
-# ============================================
-# APPROVAL WORKFLOW
-# ============================================
-
-@volunteer_router.post("/volunteers/approve")
-async def approve_volunteers(
-    data: VolunteerApprovalFormData,
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
-):
-    """Approve or reject volunteers"""
-    now = datetime.utcnow()
-    updated = 0
-    
-    for vol_id in data.volunteer_ids:
-        if vol_id in _volunteers_db:
-            volunteer = _volunteers_db[vol_id]
-            
-            if data.action == "approve":
-                volunteer["status"] = VolunteerStatus.APPROVED
-                volunteer["approvedAt"] = now
-                volunteer["approvedBy"] = "current-user"  # TODO: Get from auth
-            else:
-                volunteer["status"] = VolunteerStatus.REJECTED
-                volunteer["validationErrors"].append(ValidationResult(
-                    is_valid=False,
-                    error_message=data.reason or "Rejected by user"
-                ))
-            
-            updated += 1
-    
-    return {
-        "success": True,
-        "message": f"{updated} volunteers {data.action}d successfully"
-    }
-
-
-@volunteer_router.post("/volunteers/submit")
-async def submit_volunteers(
-    volunteer_ids: List[str],
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
-):
-    """Submit volunteers for checker approval"""
-    now = datetime.utcnow()
-    updated = 0
-    
-    for vol_id in volunteer_ids:
-        if vol_id in _volunteers_db:
-            volunteer = _volunteers_db[vol_id]
-            
-            # Only submit valid/approved volunteers
-            if volunteer["status"] in [VolunteerStatus.VALID, VolunteerStatus.APPROVED]:
-                volunteer["status"] = VolunteerStatus.SUBMITTED
-                volunteer["submittedAt"] = now
-                volunteer["submittedBy"] = "current-user"
-                updated += 1
-    
-    return {
-        "success": True,
-        "message": f"{updated} volunteers submitted successfully"
-    }
-
-
-# ============================================
-# NEW SIMPLE UPLOAD ENDPOINT
-# ============================================
-
 @volunteer_router.post("/import-batch")
 async def import_batch_new(
+    request: Request,
     batch_data: dict,
     volunteer_db: AsyncSession = Depends(volunteer_db_session)
 ):
+    """Import batch to import_file table.
+
+    Accepts: fileName, recordCount.
+    Table columns: id, user_id, import_at, file_name, record_count, status,
+    created_at, updated_at.
     """
-    NEW ENDPOINT - Import batch to import_file table.
-    Accepts: fileName, recordCount
-    Table columns: id, user_id, import_at, file_name, record_count, status, created_at, updated_at
-    """
+    request_id = _request_id(request)
+    user_id = _user_id_from_request(request) or 5
     now = datetime.utcnow()
-    
+
+    logger.info(
+        f"[{request_id}] /import-batch user_id={user_id} file={batch_data.get('fileName')} "
+        f"records={batch_data.get('recordCount')}"
+    )
+
     try:
-        # Insert directly into import_file table using raw SQL
         insert_stmt = text("""
-            INSERT INTO import_file 
+            INSERT INTO import_file
             (user_id, import_at, file_name, record_count, status, created_at, updated_at)
-            VALUES 
+            VALUES
             (:user_id, :import_at, :file_name, :record_count, :status, :created_at, :updated_at)
             RETURNING id
         """)
-        
+
         result = await volunteer_db.execute(
             insert_stmt,
             {
-                "user_id": 5,  # Default to user 5 (from login)
+                "user_id": user_id,
                 "import_at": now,
                 "file_name": batch_data.get("fileName", "unknown"),
                 "record_count": batch_data.get("recordCount", 0),
@@ -567,11 +207,14 @@ async def import_batch_new(
                 "updated_at": now
             }
         )
-        
-        # Get the inserted ID
+
         import_file_id = result.scalar()
         await volunteer_db.commit()
-        
+
+        logger.info(
+            f"[{request_id}] /import-batch inserted import_file id={import_file_id}"
+        )
+
         return {
             "success": True,
             "message": "Batch imported successfully",
@@ -580,11 +223,38 @@ async def import_batch_new(
             "recordCount": batch_data.get("recordCount", 0),
             "status": "pending",
             "importAt": now.isoformat(),
-            "createdAt": now.isoformat()
+            "createdAt": now.isoformat(),
+            "requestId": request_id,
         }
-    
-    except Exception as e:
+
+    except Exception as exc:
         await volunteer_db.rollback()
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.DB_INSERT_FAILED,
+            message=f"Failed to import batch: {exc}",
+            status_code=500,
+            severity=ErrorSeverity.ERROR,
+            details={
+                "file_name": batch_data.get("fileName"),
+                "record_count": batch_data.get("recordCount"),
+                "user_id": user_id,
+            },
+            request_id=request_id,
+            user_id=user_id,
+            request=request,
+            exc=exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "errorCode": ErrorCode.DB_INSERT_FAILED.value,
+                "message": "Failed to import batch",
+                "requestId": request_id,
+            },
+        )
+
+
 # ============================================
 # OLD UPLOAD ENDPOINT (kept for compatibility)
 # ============================================
@@ -593,154 +263,9 @@ async def import_batch_new(
 # DASHBOARD
 # ============================================
 
-@volunteer_router.get("/dashboard", response_model=DashboardStats)
-async def get_dashboard(
-    region: Optional[Region] = Query(None),
-    event_number: Optional[int] = Query(None, alias="eventNumber"),
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
-):
-    """Get dashboard statistics"""
-    # Filter volunteers
-    filtered = list(_volunteers_db.values())
-    
-    if region:
-        filtered = [v for v in filtered if v.get("region") == region]
-    if event_number:
-        filtered = [v for v in filtered if v.get("eventNumber") == event_number]
-    
-    # Calculate totals
-    total_required = 9 * 3500  # 9 events × 3500 volunteers
-    total_received = len(filtered)
-    total_valid = len([v for v in filtered if v["status"] == VolunteerStatus.VALID])
-    total_rejected = len([v for v in filtered if v["status"] == VolunteerStatus.REJECTED])
-    total_discrepant = len([v for v in filtered if v["status"] == VolunteerStatus.DISCREPANT])
-    total_approved = len([v for v in filtered if v["status"] == VolunteerStatus.APPROVED])
-    total_printed = len([v for v in filtered if v["status"] == VolunteerStatus.PRINTED])
-    total_dispatched = len([v for v in filtered if v["status"] == VolunteerStatus.DISPATCHED])
-    
-    received_pct = (total_received / total_required * 100) if total_required > 0 else 0
-    printed_pct = (total_printed / total_required * 100) if total_required > 0 else 0
-    
-    # Stats by region
-    by_region = []
-    for r in Region:
-        r_vols = [v for v in filtered if v.get("region") == r]
-        by_region.append(RegionStats(
-            region=r,
-            total=len(r_vols),
-            valid=len([v for v in r_vols if v["status"] == VolunteerStatus.VALID]),
-            rejected=len([v for v in r_vols if v["status"] == VolunteerStatus.REJECTED]),
-            discrepant=len([v for v in r_vols if v["status"] == VolunteerStatus.DISCREPANT]),
-            approved=len([v for v in r_vols if v["status"] == VolunteerStatus.APPROVED]),
-            printed=len([v for v in r_vols if v["status"] == VolunteerStatus.PRINTED]),
-            dispatched=len([v for v in r_vols if v["status"] == VolunteerStatus.DISPATCHED])
-        ))
-    
-    # Stats by event
-    by_event = []
-    for i in range(1, 10):
-        e_vols = [v for v in filtered if v.get("eventNumber") == i]
-        required = 4350 if i == 9 else 3500
-        received = len(e_vols)
-        by_event.append(EventStats(
-            event_number=i,
-            event_name=f"Didar Mubarak - Event {i}",
-            required=required,
-            received=received,
-            valid=len([v for v in e_vols if v["status"] == VolunteerStatus.VALID]),
-            approved=len([v for v in e_vols if v["status"] == VolunteerStatus.APPROVED]),
-            printed=len([v for v in e_vols if v["status"] == VolunteerStatus.PRINTED]),
-            percentage=(received / required * 100) if required > 0 else 0
-        ))
-    
-    # Stats by access level
-    by_access_level = []
-    for level in range(1, 6):
-        l_vols = [v for v in filtered if v.get("accessLevel") == level]
-        by_access_level.append(AccessLevelStats(
-            access_level=level,
-            access_level_name=ACCESS_LEVEL_NAMES.get(level, f"Level {level}"),
-            band_color=ACCESS_LEVEL_BAND_COLORS.get(level, "#808080"),
-            required=0,  # TODO: Get from quotas
-            received=len(l_vols),
-            valid=len([v for v in l_vols if v["status"] == VolunteerStatus.VALID]),
-            printed=len([v for v in l_vols if v["status"] == VolunteerStatus.PRINTED])
-        ))
-    
-    return DashboardStats(
-        total_required=total_required,
-        total_received=total_received,
-        total_valid=total_valid,
-        total_rejected=total_rejected,
-        total_discrepant=total_discrepant,
-        total_approved=total_approved,
-        total_printed=total_printed,
-        total_dispatched=total_dispatched,
-        received_percentage=round(received_pct, 2),
-        printed_percentage=round(printed_pct, 2),
-        by_region=by_region,
-        by_event=by_event,
-        by_access_level=by_access_level
-    )
-
-
-# ============================================
-# UPLOAD BATCHES
-# ============================================
-
-@volunteer_router.get("/batches")
-async def get_batches(
-    region: Optional[Region] = Query(None),
-    status: Optional[str] = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100, alias="pageSize"),
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
-):
-    """Get upload batches"""
-    filtered = list(_batches_db.values())
-    
-    if region:
-        filtered = [b for b in filtered if b.get("region") == region]
-    if status:
-        filtered = [b for b in filtered if b.get("status") == status]
-    
-    # Sort by createdAt desc
-    filtered.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
-    
-    # Paginate
-    total = len(filtered)
-    start = (page - 1) * page_size
-    end = start + page_size
-    
-    return {
-        "data": filtered[start:end],
-        "pagination": {
-            "total": total,
-            "page": page,
-            "pageSize": page_size,
-            "totalPages": (total + page_size - 1) // page_size
-        }
-    }
-
-
-@volunteer_router.get("/batches/{batch_id}")
-async def get_batch(
-    batch_id: str,
-    volunteer_db: AsyncSession = Depends(volunteer_db_session)
-):
-    """Get a specific batch"""
-    if batch_id not in _batches_db:
-        raise HTTPException(status_code=404, detail="Batch not found")
-    return _batches_db[batch_id]
-
-
-# ============================================
-# EVENT ACCESS LEVEL DUTY REQUIREMENTS
-# ============================================
-
-
 @volunteer_router.get("/event-access-level-duty-requirements")
 async def get_event_access_level_duty_requirements(
+    request: Request,
     volunteer_db: AsyncSession = Depends(volunteer_db_session)
 ):
     """Return event access-level duty requirements with related names.
@@ -748,6 +273,8 @@ async def get_event_access_level_duty_requirements(
     This returns strings (names) for event, access level and duty type
     and a list of band type names (if any) instead of numeric IDs.
     """
+    request_id = _request_id(request)
+    logger.info(f"[{request_id}] /event-access-level-duty-requirements")
     sql = text("""
     SELECT
         r.id,
@@ -769,8 +296,28 @@ async def get_event_access_level_duty_requirements(
     ORDER BY e.name, al.name, dt.name
     """)
 
-    result = await volunteer_db.execute(sql)
-    rows = result.fetchall()
+    try:
+        result = await volunteer_db.execute(sql)
+        rows = result.fetchall()
+    except Exception as exc:
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.DB_QUERY_FAILED,
+            message=f"Failed to load event/access-level/duty requirements: {exc}",
+            status_code=500,
+            severity=ErrorSeverity.ERROR,
+            request_id=request_id,
+            request=request,
+            exc=exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "errorCode": ErrorCode.DB_QUERY_FAILED.value,
+                "message": "Could not load duty requirements",
+                "requestId": request_id,
+            },
+        )
 
     # Build hierarchical structure: event -> accessLevels -> duties
     events_map = {}
@@ -835,8 +382,26 @@ class VolunteerRecordQuery(BaseModel):
     userId: int = Field(..., alias="userId")
 
 
+class VolunteerRecordCreate(BaseModel):
+    """Payload for creating one volunteer record."""
+    sno: int = Field(..., validation_alias=AliasChoices("sno", "Sno"))
+    userId: int = Field(..., alias="userId")
+    cnic: str
+    name: str
+    event: Union[int, str]
+    access_level: Union[int, str] = Field(..., alias="accessLevel")
+    duty_type: Union[int, str] = Field(..., alias="dutyType")
+    decision_status: str = Field("pending", alias="decisionStatus")
+    register: Optional[str] = "No"
+    import_id: Optional[int] = Field(None, alias="importId")
+
+    class Config:
+        populate_by_name = True
+
+
 @volunteer_router.post("/volunteers/by-import-or-user")
 async def get_volunteers_by_user_or_import(
+    request: Request,
     query: VolunteerRecordQuery,
     volunteer_db: AsyncSession = Depends(volunteer_db_session)
 ):
@@ -845,6 +410,8 @@ async def get_volunteers_by_user_or_import(
     Request body: { "userId": int }
     Returns event, access level, and duty type names instead of IDs.
     """
+    request_id = _request_id(request)
+    logger.info(f"[{request_id}] /volunteers/by-import-or-user userId={query.userId}")
     sql = """
     SELECT 
         vr.id, 
@@ -870,8 +437,30 @@ async def get_volunteers_by_user_or_import(
     params = {"userId": query.userId}
 
     stmt = text(sql)
-    result = await volunteer_db.execute(stmt, params)
-    rows = result.fetchall()
+    try:
+        result = await volunteer_db.execute(stmt, params)
+        rows = result.fetchall()
+    except Exception as exc:
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.DB_QUERY_FAILED,
+            message=f"Failed to load volunteers for userId={query.userId}: {exc}",
+            status_code=500,
+            severity=ErrorSeverity.ERROR,
+            details={"user_id": query.userId},
+            request_id=request_id,
+            user_id=query.userId,
+            request=request,
+            exc=exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "errorCode": ErrorCode.DB_QUERY_FAILED.value,
+                "message": "Could not load volunteer records",
+                "requestId": request_id,
+            },
+        )
 
     out = []
     for r in rows:
@@ -905,89 +494,71 @@ class CNICBatchQuery(BaseModel):
 
 
 @cnic_router.post("/cnic-usage/batch")
-async def check_cnic_usage_batch(
-    query: CNICBatchQuery,
-    census_db: AsyncSession = Depends(census_db_session)
+async def cnic_usage_batch(
+    request: Request,
+    payload: CNICBatchQuery,
+    census_db: AsyncSession = Depends(census_db_session),
+    volunteer_db: AsyncSession = Depends(volunteer_db_session),
 ):
-    """Check which CNICs are NOT found in census database.
-    
-    Checks both FamilyLevelDetails.IdNumber and form.HouseHoldCNIC tables.
-    Returns only CNICs that don't exist in either table.
-    
-    Request body: { "cnics": ["3710123456789", "3710987654321", ...] }
-    Response: { "notFound": ["3710123456789"], "found": ["3710987654321"] }
-    """
-    if not query.cnics:
-        return {"notFound": [], "found": []}
-    
-    # Normalize CNICs (remove dashes)
-    normalized_cnics = [cnic.replace("-", "").strip() for cnic in query.cnics]
-    
+    """Check CNIC existence in census DB only (batch mode)."""
+    request_id = _request_id(request)
+    normalized_cnics = [normalize_cnic(c) for c in payload.cnics if normalize_cnic(c)]
+    logger.info(
+        f"[{request_id}] /cnic-usage/batch raw={len(payload.cnics)} normalized={len(normalized_cnics)}"
+    )
+    if not normalized_cnics:
+        return {"success": True, "results": [], "requestId": request_id}
+
+    sql = text("""
+        SELECT replace(coalesce("IdNumber", ''), '-', '') AS cnic_norm, COUNT(*)::int AS cnt
+        FROM "FamilyLevelDetails"
+        WHERE replace(coalesce("IdNumber", ''), '-', '') = ANY(:cnics)
+        GROUP BY replace(coalesce("IdNumber", ''), '-', '')
+    """)
+
     try:
-        # Check in FamilyLevelDetails table
-        family_sql = text("""
-            SELECT DISTINCT "IdNumber" 
-            FROM "FamilyLevelDetails"
-            WHERE "IdNumber" = ANY(:cnics)
-        """)
-        family_result = await census_db.execute(family_sql, {"cnics": normalized_cnics})
-        family_found = set(row[0] for row in family_result.fetchall())
-        
-        # Try to check in form table (may not exist)
-        form_found = set()
-        try:
-            form_sql = text("""
-                SELECT DISTINCT "HouseHoldCNIC"
-                FROM "form"
-                WHERE "HouseHoldCNIC" = ANY(:cnics)
-            """)
-            form_result = await census_db.execute(form_sql, {"cnics": normalized_cnics})
-            form_found = set(row[0] for row in form_result.fetchall())
-        except Exception as form_error:
-            logger.warning(f"Could not query form table: {str(form_error)}")
-        
-        # Combine all found CNICs
-        all_found = family_found.union(form_found)
-        
-        # Find CNICs not in either table
-        not_found = [cnic for cnic in normalized_cnics if cnic not in all_found]
-        found = [cnic for cnic in normalized_cnics if cnic in all_found]
-        
+        result = await census_db.execute(sql, {"cnics": normalized_cnics})
+        counts = {row[0]: row[1] for row in result.fetchall()}
+
         return {
-            "notFound": not_found,
-            "found": found,
-            "totalChecked": len(normalized_cnics),
-            "totalFound": len(found),
-            "totalNotFound": len(not_found)
+            "success": True,
+            "results": [
+                {
+                    "cnic": cnic,
+                    "isUsed": counts.get(cnic, 0) > 0,
+                    "usageCount": counts.get(cnic, 0)
+                }
+                for cnic in normalized_cnics
+            ],
+            "requestId": request_id,
         }
-    
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error checking CNIC usage: {str(e)}"
+    except Exception as exc:
+        # Log against the volunteer (primary) DB - census DB sessions are
+        # external and we don't want to mix our log table with that schema.
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.CENSUS_DB_ERROR,
+            message=f"Failed to check CNIC usage in census DB: {exc}",
+            status_code=502,
+            severity=ErrorSeverity.ERROR,
+            details={"cnic_count": len(normalized_cnics)},
+            request_id=request_id,
+            request=request,
+            exc=exc,
         )
-
-
-# SINGLE VOLUNTEER RECORD INSERT
-# ============================================
-
-
-class VolunteerRecordCreate(BaseModel):
-    sno: int = Field(..., alias="Sno")
-    userId: int = Field(..., alias="userId")
-    cnic: Optional[str] = None
-    name: Optional[str] = None
-    # `event`, `accessLevel`, `dutyType` may be provided as numeric IDs or as names (strings).
-    event: Optional[Union[int, str]] = None
-    access_level: Optional[Union[int, str]] = Field(None, alias="accessLevel")
-    duty_type: Optional[Union[int, str]] = Field(None, alias="dutyType")
-    import_id: Optional[int] = Field(None, alias="importId")
-    decision_status: Optional[str] = Field("pending", alias="decisionStatus")
-    register: Optional[str] = Field(None, alias="register")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "errorCode": ErrorCode.CENSUS_DB_ERROR.value,
+                "message": "Failed to check CNIC usage",
+                "requestId": request_id,
+            },
+        )
 
 
 @volunteer_router.post("/volunteers/record")
 async def create_volunteer_record(
+    request: Request,
     record: VolunteerRecordCreate,
     volunteer_db: AsyncSession = Depends(volunteer_db_session)
 ):
@@ -995,6 +566,10 @@ async def create_volunteer_record(
 
     Fields expected from frontend: Sno, userId, cnic, name, event, Access level, Duty Type
     """
+    request_id = _request_id(request)
+    logger.info(
+        f"[{request_id}] /volunteers/record sno={record.sno} cnic={record.cnic} userId={record.userId}"
+    )
     now = datetime.utcnow()
     insert_sql = text("""
         INSERT INTO volunteer_record
@@ -1006,10 +581,30 @@ async def create_volunteer_record(
         RETURNING id
     """)
 
-    # Resolve names to IDs when strings are provided
-    event_id = await _resolve_name_to_id(volunteer_db, "events", record.event)
-    access_level_id = await _resolve_name_to_id(volunteer_db, "access_levels", record.access_level)
-    duty_type_id = await _resolve_name_to_id(volunteer_db, "duty_types", record.duty_type)
+    try:
+        event_id = await _resolve_name_to_id(volunteer_db, "events", record.event)
+        access_level_id = await _resolve_name_to_id(volunteer_db, "access_levels", record.access_level)
+        duty_type_id = await _resolve_name_to_id(volunteer_db, "duty_types", record.duty_type)
+    except HTTPException as http_exc:
+        # _resolve_name_to_id raises 400 with a useful message; log it.
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.VALIDATION_ERROR,
+            message=f"Could not resolve lookup for record sno={record.sno}: {http_exc.detail}",
+            status_code=http_exc.status_code,
+            severity=ErrorSeverity.WARNING,
+            details={
+                "sno": record.sno,
+                "cnic": record.cnic,
+                "event": str(record.event),
+                "access_level": str(record.access_level),
+                "duty_type": str(record.duty_type),
+            },
+            request_id=request_id,
+            user_id=record.userId,
+            request=request,
+        )
+        raise
 
     params = {
         "record_number": record.sno,
@@ -1031,19 +626,50 @@ async def create_volunteer_record(
         result = await volunteer_db.execute(insert_sql, params)
         inserted_id = result.scalar()
         await volunteer_db.commit()
-        return {"success": True, "id": inserted_id}
-    except Exception as e:
+        logger.info(
+            f"[{request_id}] /volunteers/record inserted id={inserted_id} sno={record.sno}"
+        )
+        return {"success": True, "id": inserted_id, "requestId": request_id}
+    except Exception as exc:
         await volunteer_db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.DB_INSERT_FAILED,
+            message=f"Failed to insert volunteer_record for sno={record.sno}: {exc}",
+            status_code=500,
+            severity=ErrorSeverity.ERROR,
+            details={
+                "sno": record.sno,
+                "cnic": record.cnic,
+                "user_id": record.userId,
+                "import_id": record.import_id,
+            },
+            request_id=request_id,
+            user_id=record.userId,
+            request=request,
+            exc=exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "errorCode": ErrorCode.DB_INSERT_FAILED.value,
+                "message": "Failed to insert volunteer record",
+                "requestId": request_id,
+            },
+        )
 
 
 @volunteer_router.post("/volunteers/records")
 async def create_volunteer_records(
+    request: Request,
     records: List[VolunteerRecordCreate],
-    volunteer_db: AsyncSession = Depends(volunteer_db_session),
-    census_db: AsyncSession = Depends(census_db_session)
+    volunteer_db: AsyncSession = Depends(volunteer_db_session)
 ):
     """Bulk insert multiple volunteer records in one call. Accepts large lists (1000+ items)."""
+    request_id = _request_id(request)
+    logger.info(
+        f"[{request_id}] /volunteers/records bulk insert count={len(records)}"
+    )
     now = datetime.utcnow()
     insert_sql = text("""
         INSERT INTO volunteer_record
@@ -1061,36 +687,9 @@ async def create_volunteer_records(
         access_cache = {}
         duty_cache = {}
 
-        # Normalize CNICs and pre-check enrollment in census DB
+        # Normalize CNICs for duplicate/discrepancy checks
         cnics = [normalize_cnic(r.cnic or "") for r in records]
         normalized_unique = list({c for c in cnics if c})
-
-        family_sql = text("""
-            SELECT DISTINCT "IdNumber" 
-            FROM "FamilyLevelDetails"
-            WHERE "IdNumber" = ANY(:cnics)
-        """)
-        family_found = set()
-        try:
-            fam_res = await census_db.execute(family_sql, {"cnics": normalized_unique})
-            family_found = set(row[0] for row in fam_res.fetchall())
-        except Exception:
-            # census DB may not be available; treat as unknown (assume found=False)
-            family_found = set()
-
-        form_found = set()
-        try:
-            form_sql = text("""
-                SELECT DISTINCT "HouseHoldCNIC"
-                FROM "form"
-                WHERE "HouseHoldCNIC" = ANY(:cnics)
-            """)
-            form_res = await census_db.execute(form_sql, {"cnics": normalized_unique})
-            form_found = set(row[0] for row in form_res.fetchall())
-        except Exception:
-            form_found = set()
-
-        enrollment_found = family_found.union(form_found)
 
         # Load existing volunteer_record rows for these CNICs
         existing_rows = {}
@@ -1160,13 +759,6 @@ async def create_volunteer_records(
         for cnic, group in by_cnic.items():
             incs = group["incoming"]
             exs = group["existing"]
-
-            # If enrollment not found -> mark all incoming as Rejected
-            if cnic and cnic not in enrollment_found:
-                for inc in incs:
-                    inc["decision_status"] = "Rejected"
-                    inc["reason"] = "CNIC not found in enrollment"
-                continue
 
             # Collect events present across existing and incoming
             events_present = set([e["event_id"] for e in exs if e.get("event_id")])
@@ -1274,13 +866,45 @@ async def create_volunteer_records(
 
         await volunteer_db.commit()
 
-        return {"success": True, "inserted": len(inserted_ids), "ids": inserted_ids}
+        # Audit summary of decisions for this batch.
+        status_summary: dict = {}
+        for inc in incoming:
+            status_summary[inc["decision_status"]] = status_summary.get(inc["decision_status"], 0) + 1
+        logger.info(
+            f"[{request_id}] /volunteers/records inserted={len(inserted_ids)} status_summary={status_summary}"
+        )
+
+        return {
+            "success": True,
+            "inserted": len(inserted_ids),
+            "ids": inserted_ids,
+            "statusSummary": status_summary,
+            "requestId": request_id,
+        }
     except HTTPException:
         await volunteer_db.rollback()
         raise
-    except Exception as e:
+    except Exception as exc:
         await volunteer_db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.DB_INSERT_FAILED,
+            message=f"Bulk insert volunteer_records failed: {exc}",
+            status_code=500,
+            severity=ErrorSeverity.ERROR,
+            details={"record_count": len(records)},
+            request_id=request_id,
+            request=request,
+            exc=exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "errorCode": ErrorCode.DB_INSERT_FAILED.value,
+                "message": "Bulk volunteer record insert failed",
+                "requestId": request_id,
+            },
+        )
 
 
 # ============================================
@@ -1309,33 +933,30 @@ async def update_maker_decisions(
     decisions: List[MakerDecisionUpdate],
     volunteer_db: AsyncSession = Depends(volunteer_db_session)
 ):
-    """Update decision_status for volunteer records by maker.
+    """Persist a batch of maker decisions.
 
-    Accepts array of {id, decisionStatus, reason, makerId}
-    Updates decision_status and updated_at in volunteer_record table.
-    Also inserts into maker_decisions table with full record details for checker review.
-    Any decision status is accepted from the maker.
+    The frontend sends an array of decisions. Each one is recorded against
+    the maker_decisions audit table. The maker id is taken from the JWT
+    token (the `MakerDecisionUpdate` payload itself does NOT carry it).
+
+    The volunteer_record.decision_status is intentionally NOT updated here
+    – it was decided at upload time and must not be overwritten by a
+    maker action.
     """
-    # Extract maker_id from JWT token
-    maker_id = 0
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        try:
-            secret = os.getenv("SECRET_KEY", "your-secret-key-here")
-            payload = jwt.decode(token, secret, algorithms=["HS256"])
-            maker_id = payload.get("id", 0)
-        except Exception:
-            pass
+    request_id = _request_id(request)
+    maker_id = _user_id_from_request(request) or 0
+
+    logger.info(
+        f"[{request_id}] /volunteers/maker-decisions count={len(decisions)} maker_id={maker_id}"
+    )
 
     now = datetime.utcnow()
-    updated_ids = []
-    request_id = str(uuid.uuid4())
-    
+    updated_ids: list = []
+    skipped_ids: list = []
+
     try:
         for idx, decision in enumerate(decisions):
             try:
-                # First, fetch current record details
                 fetch_sql = text("""
                     SELECT record_number, cnic, name, event_id, access_level_id, duty_type_id,
                            record_status, register, checker_id, import_id
@@ -1344,9 +965,9 @@ async def update_maker_decisions(
                 """)
                 result = await volunteer_db.execute(fetch_sql, {"id": decision.id})
                 record = result.fetchone()
-                
+
                 if not record:
-                    # Log volunteer not found
+                    skipped_ids.append(decision.id)
                     await ErrorLogger.log_error(
                         db=volunteer_db,
                         code=ErrorCode.VOLUNTEER_NOT_FOUND,
@@ -1356,35 +977,14 @@ async def update_maker_decisions(
                         details={
                             "volunteer_id": decision.id,
                             "index": idx,
-                            "request_id": request_id
+                            "decision_status": decision.decisionStatus,
                         },
-                        request_id=request_id
+                        request_id=request_id,
+                        user_id=maker_id or None,
+                        request=request,
                     )
                     continue
 
-                # Validate decision status - REMOVED: Allow any decision status from maker
-                # valid_statuses = ["Ok", "Rejected", "Discrepant-1", "Discrepant-2"]
-                # if decision.decisionStatus not in valid_statuses:
-                #     await ErrorLogger.log_error(
-                #         db=volunteer_db,
-                #         code=ErrorCode.VALIDATION_ERROR,
-                #         message=f"Invalid decision status: {decision.decisionStatus}",
-                #         status_code=400,
-                #         severity=ErrorSeverity.ERROR,
-                #         details={
-                #             "volunteer_id": decision.id,
-                #             "status_provided": decision.decisionStatus,
-                #             "valid_statuses": valid_statuses,
-                #             "request_id": request_id
-                #         },
-                #         request_id=request_id
-                #     )
-                #     continue
-
-                # DO NOT update volunteer_record — the decision_status in volunteer_record
-                # was set during upload (Ok/Rejected/Discrepant-1/Discrepant-2/pending)
-                # and must not be changed by the maker's action.
-                # Only insert into maker_decisions as an audit/decision record.
                 insert_sql = text("""
                     INSERT INTO maker_decisions
                     (volunteer_record_id, maker_id, decision_status, reason,
@@ -1416,73 +1016,66 @@ async def update_maker_decisions(
                 await volunteer_db.execute(insert_sql, insert_params)
                 updated_ids.append(decision.id)
 
-                # Log successful decision
                 logger.info(
-                    f"[{request_id}] Maker decision recorded for volunteer {decision.id}",
-                    extra={
-                        "volunteer_id": decision.id,
-                        "decision_status": decision.decisionStatus,
-                        "maker_id": decision.makerId,
-                        "request_id": request_id
-                    }
+                    f"[{request_id}] maker decision id={decision.id} status={decision.decisionStatus} maker_id={maker_id}"
                 )
-                
-            except Exception as e:
-                # Log individual record processing error
+
+            except Exception as exc:
                 await ErrorLogger.log_error(
                     db=volunteer_db,
                     code=ErrorCode.DB_INSERT_FAILED,
-                    message=f"Failed to process decision for volunteer {decision.id}: {str(e)}",
+                    message=f"Failed to record maker decision for volunteer {decision.id}: {exc}",
                     status_code=500,
                     severity=ErrorSeverity.ERROR,
                     details={
                         "volunteer_id": decision.id,
-                        "error": str(e),
+                        "decision_status": decision.decisionStatus,
                         "index": idx,
-                        "request_id": request_id
                     },
-                    request_id=request_id
+                    request_id=request_id,
+                    user_id=maker_id or None,
+                    request=request,
+                    exc=exc,
                 )
-                logger.exception(f"[{request_id}] Error processing decision for volunteer {decision.id}")
+                logger.exception(
+                    f"[{request_id}] Error processing decision for volunteer {decision.id}"
+                )
 
         await volunteer_db.commit()
-        
-        # Log batch success
+
         logger.info(
-            f"[{request_id}] Batch decisions processed successfully",
-            extra={
-                "total_records": len(decisions),
-                "updated_count": len(updated_ids),
-                "request_id": request_id
-            }
+            f"[{request_id}] /volunteers/maker-decisions done updated={len(updated_ids)} "
+            f"skipped={len(skipped_ids)} total={len(decisions)}"
         )
 
         return {
             "success": True,
             "updated": len(updated_ids),
             "updatedIds": updated_ids,
-            "requestId": request_id
+            "skipped": len(skipped_ids),
+            "skippedIds": skipped_ids,
+            "requestId": request_id,
         }
-        
-    except Exception as e:
+
+    except Exception as exc:
         await volunteer_db.rollback()
-        
-        # Log batch processing error
         await ErrorLogger.log_error(
             db=volunteer_db,
             code=ErrorCode.DB_QUERY_FAILED,
-            message=f"Batch decision processing failed: {str(e)}",
+            message=f"Batch maker-decisions processing failed: {exc}",
             status_code=500,
             severity=ErrorSeverity.CRITICAL,
-            details={
-                "total_records": len(decisions),
-                "error": str(e),
-                "request_id": request_id
-            },
-            request_id=request_id
+            details={"total_records": len(decisions)},
+            request_id=request_id,
+            user_id=maker_id or None,
+            request=request,
+            exc=exc,
         )
-        
         raise HTTPException(
             status_code=500,
-            detail=f"Batch processing failed. Request ID: {request_id}"
+            detail={
+                "errorCode": ErrorCode.DB_QUERY_FAILED.value,
+                "message": "Batch processing failed",
+                "requestId": request_id,
+            },
         )
