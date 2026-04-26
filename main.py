@@ -100,11 +100,22 @@ CENSUS_DATABASE_URL = (
     f"@{CENSUS_HOST}:{CENSUS_PORT}/{CENSUS_DB}"
 )
 
+# Comma-separated extra origins, e.g. on Heroku: CORS_ORIGINS=https://myapp.vercel.app
+_cors_base = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://northen-volunteer-25070e7d956a.herokuapp.com",
+]
+_cors_extra = [o.strip() for o in (os.getenv("CORS_ORIGINS") or "").split(",") if o.strip()]
+CORS_ALLOW_ORIGINS = list(dict.fromkeys(_cors_base + _cors_extra))
+
 app = FastAPI(title="JamatKhana API", version="1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=CORS_ALLOW_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
