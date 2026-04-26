@@ -111,7 +111,27 @@ _cors_base = [
 _cors_extra = [o.strip() for o in (os.getenv("CORS_ORIGINS") or "").split(",") if o.strip()]
 CORS_ALLOW_ORIGINS = list(dict.fromkeys(_cors_base + _cors_extra))
 
-app = FastAPI(title="JamatKhana API", version="1.0")
+# Public base URL for Swagger "Try it out" (set on Heroku if the hostname changes)
+_PUBLIC_BASE = (os.getenv("PUBLIC_API_BASE_URL") or "https://northen-volunteer-25070e7d956a.herokuapp.com").rstrip(
+    "/"
+)
+
+app = FastAPI(
+    title="Jamat Khana / Volunteer API",
+    version="1.0",
+    description=(
+        "Volunteer management and Jamat Khana event APIs. "
+        "**ReDoc:** `/redoc` — **OpenAPI JSON:** `/openapi.json`. "
+        "Authenticate via `POST /api/volunteers/auth/login`, then **Authorize** in Swagger for Bearer tokens."
+    ),
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    servers=[
+        {"url": _PUBLIC_BASE, "description": "Production (Heroku)"},
+        {"url": "http://127.0.0.1:8001", "description": "Local development"},
+    ],
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -267,6 +287,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# OpenAPI "Authorize" still uses /login (OAuth2 form); route is hidden from the docs list.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 
@@ -484,7 +505,7 @@ async def send_seed_password_email(
         return False
 
 
-@app.post("/login", response_model=Token)
+@app.post("/login", response_model=Token, include_in_schema=False)
 async def login(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -565,7 +586,7 @@ async def login(
     }
 
 
-@app.post("/login-json", response_model=Token)
+@app.post("/login-json", response_model=Token, include_in_schema=False)
 async def login_json(
     request: Request,
     payload: LoginRequest,
@@ -656,7 +677,7 @@ async def login_json(
     }
 
 
-@app.post("/refresh", response_model=Token)
+@app.post("/refresh", response_model=Token, include_in_schema=False)
 async def refresh_token(
     request: Request,
     token_data: TokenRefresh,
@@ -816,12 +837,12 @@ app.include_router(volunteer_api_v2.cnic_router)
 app.include_router(admin_error_router, dependencies=[Depends(get_current_user)])
 
 
-@app.get("/health")
+@app.get("/health", include_in_schema=False)
 async def health():
     return {"status": "healthy"}
 
 
-@app.get("/debug/config")
+@app.get("/debug/config", include_in_schema=False)
 async def debug_config():
     return {
         "POSTGRES_HOST": POSTGRES_HOST,
