@@ -79,6 +79,8 @@ ACCESS_LEVEL_BAND_COLORS = {
 
 # Duty Type -> Access Level mapping (from frontend)
 DUTY_TYPE_ACCESS_LEVELS = {
+    # Meta: UI filter / not a physical station assignment
+    "All": 4,
     # Stage (1)
     "Reciter": 1,
     "Volunteer": 1,

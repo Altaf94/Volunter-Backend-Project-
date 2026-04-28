@@ -1,0 +1,147 @@
+[2026-04-27 00:32:54] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:32:54] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:37:40] INFO - main:dispatch:179 - [44bf926b-05fe-4a24-a5fc-4de938ac5942] --> POST /api/volunteers/maker-decisions/submit from 127.0.0.1
+[2026-04-27 00:37:44] INFO - volunteer_api_v2:submit_checker_maker_decisions:1231 - [44bf926b-05fe-4a24-a5fc-4de938ac5942] /volunteers/maker-decisions/submit count=1 checker_id=0 importId=116
+[2026-04-27 00:37:47] INFO - main:dispatch:222 - [44bf926b-05fe-4a24-a5fc-4de938ac5942] <-- POST /api/volunteers/maker-decisions/submit status=200 time=6880.6ms
+[2026-04-27 00:40:16] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:40:16] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:40:18] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:40:18] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:40:19] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:40:19] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:40:20] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:40:20] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:40:21] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:40:21] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:58:41] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:58:41] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:58:42] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:58:42] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:58:44] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:58:44] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:58:46] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:58:46] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 00:58:47] INFO - logging_config:setup_logging:83 - Logging initialized. Log file: logs/volunteer_api_20260427.log
+[2026-04-27 00:58:47] DEBUG - passlib.registry:register_crypt_handler:296 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+[2026-04-27 21:44:02] INFO - main:dispatch:179 - [bbd460c4-a93e-4f74-860b-55e3a929d76b] --> GET /health from 127.0.0.1
+[2026-04-27 21:44:02] INFO - main:dispatch:222 - [bbd460c4-a93e-4f74-860b-55e3a929d76b] <-- GET /health status=200 time=106.9ms
+[2026-04-27 21:44:02] INFO - main:dispatch:179 - [bb93083a-ad03-4478-9d34-e63051f19d35] --> GET /health from 127.0.0.1
+[2026-04-27 21:44:02] INFO - main:dispatch:222 - [bb93083a-ad03-4478-9d34-e63051f19d35] <-- GET /health status=200 time=0.9ms
+[2026-04-28 13:09:40] INFO - main:dispatch:179 - [212954e9-cf5a-4263-8857-d65d6fa8f2c1] --> GET /health from 127.0.0.1
+[2026-04-28 13:09:40] INFO - main:dispatch:222 - [212954e9-cf5a-4263-8857-d65d6fa8f2c1] <-- GET /health status=200 time=79.7ms
+[2026-04-28 13:09:40] INFO - main:dispatch:179 - [5cefe53f-fc7b-41c5-9420-56741d2d57dc] --> GET /health from 127.0.0.1
+[2026-04-28 13:09:40] INFO - main:dispatch:222 - [5cefe53f-fc7b-41c5-9420-56741d2d57dc] <-- GET /health status=200 time=0.5ms
+[2026-04-28 13:25:27] INFO - main:dispatch:179 - [d877ac3a-97f7-43ec-967d-50bd0b923e7f] --> OPTIONS /api/volunteers/auth/login from 127.0.0.1
+[2026-04-28 13:25:27] INFO - main:dispatch:222 - [d877ac3a-97f7-43ec-967d-50bd0b923e7f] <-- OPTIONS /api/volunteers/auth/login status=200 time=14.3ms
+[2026-04-28 13:25:27] INFO - main:dispatch:179 - [50177e02-53a5-464e-8b9b-634f3bfbe628] --> POST /api/volunteers/auth/login from 127.0.0.1
+[2026-04-28 13:25:27] INFO - volunteer_auth:login:239 - [50177e02-53a5-464e-8b9b-634f3bfbe628] /auth/login email=test-login@example.com
+[2026-04-28 13:25:32] WARNING - passlib.handlers.bcrypt:_load_backend_mixin:622 - (trapped) error reading bcrypt version
+Traceback (most recent call last):
+  File "/Users/altafhassan/Desktop/volunteer-Backend-app /.venv/lib/python3.13/site-packages/passlib/handlers/bcrypt.py", line 620, in _load_backend_mixin
+    version = _bcrypt.__about__.__version__
+              ^^^^^^^^^^^^^^^^^
+AttributeError: module 'bcrypt' has no attribute '__about__'
+[2026-04-28 13:25:32] DEBUG - passlib.handlers.bcrypt:_load_backend_mixin:625 - detected 'bcrypt' backend, version '<unknown>'
+[2026-04-28 13:25:32] DEBUG - passlib.handlers.bcrypt:_finalize_backend_mixin:406 - 'bcrypt' backend lacks $2$ support, enabling workaround
+[2026-04-28 13:25:33] INFO - main:dispatch:222 - [50177e02-53a5-464e-8b9b-634f3bfbe628] <-- POST /api/volunteers/auth/login status=200 time=6023.1ms
+[2026-04-28 13:25:33] INFO - main:dispatch:179 - [7927e84c-8e47-463e-b793-1004728a89ae] --> OPTIONS /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:25:33] INFO - main:dispatch:222 - [7927e84c-8e47-463e-b793-1004728a89ae] <-- OPTIONS /api/volunteers/by-import-or-user status=200 time=1.5ms
+[2026-04-28 13:25:33] INFO - main:dispatch:179 - [7f6a7580-177d-498b-95c6-516930b71a3d] --> OPTIONS /api/volunteers/upload-batches from 127.0.0.1
+[2026-04-28 13:25:33] INFO - main:dispatch:222 - [7f6a7580-177d-498b-95c6-516930b71a3d] <-- OPTIONS /api/volunteers/upload-batches status=200 time=1.2ms
+[2026-04-28 13:25:33] INFO - main:dispatch:179 - [b05d3c86-511b-4356-9647-08450b666546] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:25:33] INFO - main:dispatch:179 - [2498e623-1712-421f-9986-dfdaeca77405] --> GET /api/volunteers/upload-batches from 127.0.0.1
+[2026-04-28 13:25:33] INFO - main:dispatch:222 - [2498e623-1712-421f-9986-dfdaeca77405] <-- GET /api/volunteers/upload-batches status=404 time=2.5ms
+[2026-04-28 13:25:34] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [b05d3c86-511b-4356-9647-08450b666546] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:25:37] INFO - main:dispatch:222 - [b05d3c86-511b-4356-9647-08450b666546] <-- POST /api/volunteers/by-import-or-user status=200 time=4589.6ms
+[2026-04-28 13:32:06] INFO - main:dispatch:179 - [5465c4e9-7483-4fd0-82d3-d0e31f319f66] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:32:06] INFO - main:dispatch:179 - [d4832512-7ec6-43dd-8525-af4ca296ddc3] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:32:09] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [5465c4e9-7483-4fd0-82d3-d0e31f319f66] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:32:09] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [d4832512-7ec6-43dd-8525-af4ca296ddc3] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:32:12] INFO - main:dispatch:222 - [5465c4e9-7483-4fd0-82d3-d0e31f319f66] <-- POST /api/volunteers/by-import-or-user status=200 time=6048.2ms
+[2026-04-28 13:32:12] INFO - main:dispatch:222 - [d4832512-7ec6-43dd-8525-af4ca296ddc3] <-- POST /api/volunteers/by-import-or-user status=200 time=6323.6ms
+[2026-04-28 13:38:06] INFO - main:dispatch:179 - [66f4e41d-96c4-44b8-9b13-fe394ec0b022] --> OPTIONS /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:38:06] INFO - main:dispatch:179 - [0c5d90b9-8858-4772-b3d8-ee8a34c582f3] --> OPTIONS /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:38:06] INFO - main:dispatch:222 - [66f4e41d-96c4-44b8-9b13-fe394ec0b022] <-- OPTIONS /api/volunteers/by-import-or-user status=200 time=20.7ms
+[2026-04-28 13:38:06] INFO - main:dispatch:222 - [0c5d90b9-8858-4772-b3d8-ee8a34c582f3] <-- OPTIONS /api/volunteers/by-import-or-user status=200 time=15.8ms
+[2026-04-28 13:38:06] INFO - main:dispatch:179 - [6b2bdbe8-24ac-44d5-a58e-67c5b5327bea] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:38:06] INFO - main:dispatch:179 - [c631014e-32c5-4533-9367-e75cc5eed239] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:38:09] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [c631014e-32c5-4533-9367-e75cc5eed239] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:38:09] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [6b2bdbe8-24ac-44d5-a58e-67c5b5327bea] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:38:12] INFO - main:dispatch:222 - [c631014e-32c5-4533-9367-e75cc5eed239] <-- POST /api/volunteers/by-import-or-user status=200 time=6039.8ms
+[2026-04-28 13:38:12] INFO - main:dispatch:222 - [6b2bdbe8-24ac-44d5-a58e-67c5b5327bea] <-- POST /api/volunteers/by-import-or-user status=200 time=6050.1ms
+[2026-04-28 13:41:01] INFO - main:dispatch:179 - [10fe78cd-6f65-4b5e-ad38-c0a0de032d6c] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:41:01] INFO - main:dispatch:179 - [49ee92d6-a20c-4459-9ba3-a9494dd93a21] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:41:03] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [10fe78cd-6f65-4b5e-ad38-c0a0de032d6c] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:41:03] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [49ee92d6-a20c-4459-9ba3-a9494dd93a21] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:41:05] INFO - main:dispatch:222 - [10fe78cd-6f65-4b5e-ad38-c0a0de032d6c] <-- POST /api/volunteers/by-import-or-user status=200 time=3955.0ms
+[2026-04-28 13:41:05] INFO - main:dispatch:222 - [49ee92d6-a20c-4459-9ba3-a9494dd93a21] <-- POST /api/volunteers/by-import-or-user status=200 time=4121.6ms
+[2026-04-28 13:41:17] INFO - main:dispatch:179 - [48c82238-b542-4cfd-badd-a16c84eab34d] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:41:17] INFO - main:dispatch:179 - [9e85743b-e82f-416e-a25b-9c16b9218614] --> OPTIONS /api/volunteers/upload-batches from 127.0.0.1
+[2026-04-28 13:41:17] INFO - main:dispatch:222 - [9e85743b-e82f-416e-a25b-9c16b9218614] <-- OPTIONS /api/volunteers/upload-batches status=200 time=2.0ms
+[2026-04-28 13:41:17] INFO - main:dispatch:179 - [d1080a69-7c3b-46ed-a420-0eb545da3633] --> GET /api/volunteers/upload-batches from 127.0.0.1
+[2026-04-28 13:41:17] INFO - main:dispatch:222 - [d1080a69-7c3b-46ed-a420-0eb545da3633] <-- GET /api/volunteers/upload-batches status=404 time=8.8ms
+[2026-04-28 13:41:18] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [48c82238-b542-4cfd-badd-a16c84eab34d] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:41:20] INFO - main:dispatch:222 - [48c82238-b542-4cfd-badd-a16c84eab34d] <-- POST /api/volunteers/by-import-or-user status=200 time=3213.1ms
+[2026-04-28 13:41:24] INFO - main:dispatch:179 - [efff590b-0d39-420d-a4cd-2c9f401485a4] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:41:24] INFO - main:dispatch:179 - [5f5a969b-aec3-47e6-b4cb-bae85821cb5c] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:41:25] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [efff590b-0d39-420d-a4cd-2c9f401485a4] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:41:25] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [5f5a969b-aec3-47e6-b4cb-bae85821cb5c] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:41:27] INFO - main:dispatch:222 - [5f5a969b-aec3-47e6-b4cb-bae85821cb5c] <-- POST /api/volunteers/by-import-or-user status=200 time=3208.1ms
+[2026-04-28 13:41:27] INFO - main:dispatch:222 - [efff590b-0d39-420d-a4cd-2c9f401485a4] <-- POST /api/volunteers/by-import-or-user status=200 time=3408.2ms
+[2026-04-28 13:41:32] INFO - main:dispatch:179 - [ba0e35a9-7e58-49a2-af73-8bb00bd094c7] --> GET /api/volunteers/upload-batches from 127.0.0.1
+[2026-04-28 13:41:32] INFO - main:dispatch:179 - [f08658ff-cb28-4528-95d2-df659c5d12be] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 13:41:32] INFO - main:dispatch:222 - [ba0e35a9-7e58-49a2-af73-8bb00bd094c7] <-- GET /api/volunteers/upload-batches status=404 time=4.9ms
+[2026-04-28 13:41:34] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [f08658ff-cb28-4528-95d2-df659c5d12be] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 13:41:36] INFO - main:dispatch:222 - [f08658ff-cb28-4528-95d2-df659c5d12be] <-- POST /api/volunteers/by-import-or-user status=200 time=3229.3ms
+[2026-04-28 13:43:21] INFO - main:dispatch:179 - [8537fc93-8d86-440d-a2dc-21e79851e39f] --> OPTIONS /api/event-access-level-duty-requirements from 127.0.0.1
+[2026-04-28 13:43:21] INFO - main:dispatch:222 - [8537fc93-8d86-440d-a2dc-21e79851e39f] <-- OPTIONS /api/event-access-level-duty-requirements status=200 time=7.9ms
+[2026-04-28 13:43:21] INFO - main:dispatch:179 - [f6d089ea-5770-4b86-b7c7-e93d73862312] --> GET /api/event-access-level-duty-requirements from 127.0.0.1
+[2026-04-28 13:43:24] INFO - volunteer_api_v2:get_event_access_level_duty_requirements:302 - [f6d089ea-5770-4b86-b7c7-e93d73862312] /event-access-level-duty-requirements
+[2026-04-28 13:43:28] INFO - main:dispatch:222 - [f6d089ea-5770-4b86-b7c7-e93d73862312] <-- GET /api/event-access-level-duty-requirements status=200 time=7412.4ms
+[2026-04-28 14:44:26] INFO - main:dispatch:179 - [733c7332-d08f-4d39-9acc-6c04e4fa031f] --> OPTIONS /api/volunteers/upload-batches from 127.0.0.1
+[2026-04-28 14:44:26] INFO - main:dispatch:179 - [54a86fb6-652c-48f0-8009-1617791d923d] --> OPTIONS /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 14:44:26] INFO - main:dispatch:222 - [733c7332-d08f-4d39-9acc-6c04e4fa031f] <-- OPTIONS /api/volunteers/upload-batches status=200 time=75.0ms
+[2026-04-28 14:44:26] INFO - main:dispatch:222 - [54a86fb6-652c-48f0-8009-1617791d923d] <-- OPTIONS /api/volunteers/by-import-or-user status=200 time=25.1ms
+[2026-04-28 14:44:26] INFO - main:dispatch:179 - [d3ef0b77-d93b-4e6b-837b-9644381473f3] --> GET /api/volunteers/upload-batches from 127.0.0.1
+[2026-04-28 14:44:26] INFO - main:dispatch:179 - [a29b3aff-8601-480d-a249-ab32851b3343] --> POST /api/volunteers/by-import-or-user from 127.0.0.1
+[2026-04-28 14:44:26] INFO - main:dispatch:222 - [d3ef0b77-d93b-4e6b-837b-9644381473f3] <-- GET /api/volunteers/upload-batches status=404 time=113.7ms
+[2026-04-28 14:44:27] INFO - main:dispatch:179 - [a0d6c486-1a3a-47d2-8310-a8b01d0fbe8e] --> GET /health from 127.0.0.1
+[2026-04-28 14:44:27] INFO - main:dispatch:222 - [a0d6c486-1a3a-47d2-8310-a8b01d0fbe8e] <-- GET /health status=200 time=2.4ms
+[2026-04-28 14:44:27] INFO - main:dispatch:179 - [0ad898a7-de86-47d7-8890-72bc532aa1cb] --> GET /health from 127.0.0.1
+[2026-04-28 14:44:27] INFO - main:dispatch:222 - [0ad898a7-de86-47d7-8890-72bc532aa1cb] <-- GET /health status=200 time=0.5ms
+[2026-04-28 14:44:30] INFO - volunteer_api_v2:get_volunteers_by_user_or_import:446 - [a29b3aff-8601-480d-a249-ab32851b3343] /volunteers/by-import-or-user userId=7 limit=None offset=0
+[2026-04-28 14:44:35] INFO - main:dispatch:222 - [a29b3aff-8601-480d-a249-ab32851b3343] <-- POST /api/volunteers/by-import-or-user status=200 time=8982.4ms
+[2026-04-28 14:44:37] INFO - main:dispatch:179 - [086d1301-781d-427c-85d2-8d2eda3ab326] --> GET /health from 127.0.0.1
+[2026-04-28 14:44:37] INFO - main:dispatch:222 - [086d1301-781d-427c-85d2-8d2eda3ab326] <-- GET /health status=200 time=2.0ms
+[2026-04-28 14:44:37] INFO - main:dispatch:179 - [3464460c-2289-4e5e-b896-4ed68a1ef6b5] --> GET /health from 127.0.0.1
+[2026-04-28 14:44:37] INFO - main:dispatch:222 - [3464460c-2289-4e5e-b896-4ed68a1ef6b5] <-- GET /health status=200 time=0.9ms
+[2026-04-28 14:44:44] INFO - main:dispatch:179 - [a4ae47cb-e644-4d22-ad8b-9bdaa2792902] --> OPTIONS /api/volunteers/auth/login from 127.0.0.1
+[2026-04-28 14:44:44] INFO - main:dispatch:222 - [a4ae47cb-e644-4d22-ad8b-9bdaa2792902] <-- OPTIONS /api/volunteers/auth/login status=200 time=2.4ms
+[2026-04-28 14:44:44] INFO - main:dispatch:179 - [e4b116ca-04d1-401e-b1d1-f2206de13515] --> POST /api/volunteers/auth/login from 127.0.0.1
+[2026-04-28 14:44:44] INFO - volunteer_auth:login:239 - [e4b116ca-04d1-401e-b1d1-f2206de13515] /auth/login email=altaf994@gmail.com
+[2026-04-28 14:44:45] INFO - main:dispatch:179 - [200a2f81-31a0-45e8-96b1-91db910f25e6] --> GET /api/volunteers/auth/login from 127.0.0.1
+[2026-04-28 14:44:45] INFO - main:dispatch:222 - [200a2f81-31a0-45e8-96b1-91db910f25e6] <-- GET /api/volunteers/auth/login status=405 time=2.1ms
+[2026-04-28 14:44:46] INFO - main:dispatch:179 - [c9206654-de01-4ef1-939e-85653d93e43f] --> GET /favicon.ico from 127.0.0.1
+[2026-04-28 14:44:46] INFO - main:dispatch:222 - [c9206654-de01-4ef1-939e-85653d93e43f] <-- GET /favicon.ico status=404 time=3.2ms
+[2026-04-28 14:44:47] WARNING - error_logging:log_error:192 - [e4b116ca-04d1-401e-b1d1-f2206de13515] [INVALID_CREDENTIALS] Login failed: user not found
+[2026-04-28 14:44:48] WARNING - main:http_exception_handler:256 - [e4b116ca-04d1-401e-b1d1-f2206de13515] HTTPException 400 on POST /api/volunteers/auth/login: Incorrect email or password
+[2026-04-28 14:44:48] INFO - main:dispatch:222 - [e4b116ca-04d1-401e-b1d1-f2206de13515] <-- POST /api/volunteers/auth/login status=400 time=3867.0ms
+[2026-04-28 14:50:29] INFO - main:dispatch:179 - [c3696d28-b47a-4f93-8bb6-b27b7f00b320] --> GET /health from 127.0.0.1
+[2026-04-28 14:50:30] INFO - main:dispatch:222 - [c3696d28-b47a-4f93-8bb6-b27b7f00b320] <-- GET /health status=200 time=35.8ms
+[2026-04-28 14:50:30] INFO - main:dispatch:179 - [80b6b645-175b-4eed-a783-b2ffb7d702f2] --> GET /health from 127.0.0.1
+[2026-04-28 14:50:30] INFO - main:dispatch:222 - [80b6b645-175b-4eed-a783-b2ffb7d702f2] <-- GET /health status=200 time=0.6ms
+[2026-04-28 14:50:51] INFO - main:dispatch:179 - [b5a15f7c-1b83-4bb6-91fe-778676de03a5] --> POST /api/volunteers/auth/login from 127.0.0.1
+[2026-04-28 14:50:51] INFO - volunteer_auth:login:239 - [b5a15f7c-1b83-4bb6-91fe-778676de03a5] /auth/login email=check@example.com
+[2026-04-28 14:50:53] INFO - main:dispatch:179 - [1f57c3e4-0e94-4004-a2b7-d2556aab8228] --> GET /api/volunteers/auth/login from 127.0.0.1
+[2026-04-28 14:50:53] INFO - main:dispatch:222 - [1f57c3e4-0e94-4004-a2b7-d2556aab8228] <-- GET /api/volunteers/auth/login status=405 time=3.8ms
+[2026-04-28 14:50:55] INFO - main:dispatch:222 - [b5a15f7c-1b83-4bb6-91fe-778676de03a5] <-- POST /api/volunteers/auth/login status=200 time=3728.2ms
+[2026-04-28 14:50:55] INFO - main:dispatch:179 - [ec89d84b-2919-4bc6-acb1-906639c5a6d4] --> OPTIONS /api/volunteers/maker-decisions from 127.0.0.1
+[2026-04-28 14:50:55] INFO - main:dispatch:179 - [7e96e567-3b25-4f6d-81cb-7380365151f0] --> OPTIONS /api/volunteers/maker-decisions from 127.0.0.1
+[2026-04-28 14:50:55] INFO - main:dispatch:222 - [ec89d84b-2919-4bc6-acb1-906639c5a6d4] <-- OPTIONS /api/volunteers/maker-decisions status=200 time=1.8ms
+[2026-04-28 14:50:55] INFO - main:dispatch:222 - [7e96e567-3b25-4f6d-81cb-7380365151f0] <-- OPTIONS /api/volunteers/maker-decisions status=200 time=2.1ms
+[2026-04-28 14:50:55] INFO - main:dispatch:179 - [ce14d16a-8f47-42c5-bfc4-4ac611f80ede] --> GET /api/volunteers/maker-decisions from 127.0.0.1
+[2026-04-28 14:50:58] INFO - volunteer_api_v2:get_maker_decisions_by_import:1392 - [ce14d16a-8f47-42c5-bfc4-4ac611f80ede] GET /volunteers/maker-decisions importId=None
+[2026-04-28 14:51:01] INFO - main:dispatch:222 - [ce14d16a-8f47-42c5-bfc4-4ac611f80ede] <-- GET /api/volunteers/maker-decisions status=200 time=5977.4ms
+[2026-04-28 14:51:01] INFO - main:dispatch:179 - [e6793fd9-375c-4a30-be0f-137c55555561] --> GET /api/volunteers/maker-decisions from 127.0.0.1
+[2026-04-28 14:51:04] INFO - volunteer_api_v2:get_maker_decisions_by_import:1392 - [e6793fd9-375c-4a30-be0f-137c55555561] GET /volunteers/maker-decisions importId=None
+[2026-04-28 14:51:06] INFO - main:dispatch:222 - [e6793fd9-375c-4a30-be0f-137c55555561] <-- GET /api/volunteers/maker-decisions status=200 time=5301.0ms

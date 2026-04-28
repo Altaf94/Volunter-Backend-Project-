@@ -22,6 +22,21 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app_config import (
+    APP_ENV,
+    DATABASE_URL,
+    DB_POOL_RECYCLE,
+    IS_DEVELOPMENT,
+    IS_PRODUCTION,
+    POSTGRES_DB,
+    POSTGRES_HOST,
+    POSTGRES_PORT,
+    POSTGRES_USER,
+    SQLALCHEMY_ECHO,
+    USE_REMOTE_DATABASE,
+    db_engine_connect_args,
+)
+
 # Import logging configuration
 from logging_config import setup_logging
 from error_logging import ErrorCode, ErrorLogger, ErrorSeverity
@@ -31,12 +46,6 @@ load_dotenv()
 # Initialize logging
 setup_logging()
 logger = logging.getLogger(__name__)
-
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "northenvolunteerdb")
-POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
 ALGORITHM = "HS256"
@@ -73,20 +82,7 @@ if is_email_configured():
 else:
     EMAIL_CONFIG = None
 
-# Heroku sets DATABASE_URL (postgres://). Local dev uses POSTGRES_* in .env.
-if os.getenv("DATABASE_URL"):
-    _raw = os.getenv("DATABASE_URL", "").strip()
-    if _raw.startswith("postgres://"):
-        DATABASE_URL = _raw.replace("postgres://", "postgresql+asyncpg://", 1)
-    elif _raw.startswith("postgresql://") and "+asyncpg" not in _raw:
-        DATABASE_URL = _raw.replace("postgresql://", "postgresql+asyncpg://", 1)
-    else:
-        DATABASE_URL = _raw
-else:
-    DATABASE_URL = (
-        f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
-        f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-    )
+# Primary PostgreSQL: app_config (development = local POSTGRES_*; production = DATABASE_URL on Heroku).
 
 # Census Database Configuration (for CNIC usage checks)
 CENSUS_HOST = os.getenv("CENSUS_HOST", "jamat-postgres.postgres.database.azure.com")
@@ -113,9 +109,27 @@ _cors_base = [
 _cors_extra = [o.strip() for o in (os.getenv("CORS_ORIGINS") or "").split(",") if o.strip()]
 CORS_ALLOW_ORIGINS = list(dict.fromkeys(_cors_base + _cors_extra))
 
-# Public base URL for Swagger "Try it out" (set on Heroku if the hostname changes)
-_PUBLIC_BASE = (os.getenv("PUBLIC_API_BASE_URL") or "https://northen-volunteer-25070e7d956a.herokuapp.com").rstrip(
-    "/"
+# Public base URL for Swagger "Try it out" (override with PUBLIC_API_BASE_URL, e.g. Vercel talks to Heroku).
+_DEFAULT_PUBLIC_PROD = "https://northen-volunteer-25070e7d956a.herokuapp.com"
+if os.getenv("PUBLIC_API_BASE_URL", "").strip():
+    _PUBLIC_BASE = os.getenv("PUBLIC_API_BASE_URL", "").strip().rstrip("/")
+elif IS_DEVELOPMENT:
+    _dev_port = os.getenv("PORT", "8001")
+    _PUBLIC_BASE = f"http://127.0.0.1:{_dev_port}"
+else:
+    _PUBLIC_BASE = _DEFAULT_PUBLIC_PROD.rstrip("/")
+
+_OPENAPI_LOCAL = f"http://127.0.0.1:{os.getenv('PORT', '8001')}"
+_OPENAPI_SERVERS = (
+    [
+        {"url": _PUBLIC_BASE, "description": "This environment (default: local Postgres in development)"},
+        {"url": _DEFAULT_PUBLIC_PROD, "description": "Production API (Heroku)"},
+    ]
+    if IS_DEVELOPMENT
+    else [
+        {"url": _PUBLIC_BASE, "description": "Production API (Heroku)"},
+        {"url": _OPENAPI_LOCAL, "description": "Local (development)"},
+    ]
 )
 
 app = FastAPI(
@@ -129,10 +143,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
-    servers=[
-        {"url": _PUBLIC_BASE, "description": "Production (Heroku)"},
-        {"url": "http://127.0.0.1:8001", "description": "Local development"},
-    ],
+    servers=_OPENAPI_SERVERS,
 )
 
 app.add_middleware(
@@ -260,21 +271,22 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     logger.warning(
         f"[{request_id}] Validation failed on {request.method} {request.url.path}: {exc.errors()}"
     )
-    # Best-effort log to DB.
-    try:
-        async with async_session() as session:
-            await ErrorLogger.log_error(
-                db=session,
-                code=ErrorCode.VALIDATION_ERROR,
-                message="Request validation failed",
-                status_code=422,
-                severity=ErrorSeverity.WARNING,
-                details={"errors": exc.errors(), "path": request.url.path},
-                request_id=request_id,
-                request=request,
-            )
-    except Exception:
-        logger.exception(f"[{request_id}] failed to persist validation error")
+    # Optional DB log (adds a round trip per 422; off by default for latency).
+    if (os.getenv("LOG_VALIDATION_ERRORS_TO_DB", "").strip().lower() in ("1", "true", "yes")):
+        try:
+            async with async_session() as session:
+                await ErrorLogger.log_error(
+                    db=session,
+                    code=ErrorCode.VALIDATION_ERROR,
+                    message="Request validation failed",
+                    status_code=422,
+                    severity=ErrorSeverity.WARNING,
+                    details={"errors": exc.errors(), "path": request.url.path},
+                    request_id=request_id,
+                    request=request,
+                )
+        except Exception:
+            logger.exception(f"[{request_id}] failed to persist validation error")
 
     return JSONResponse(
         status_code=422,
@@ -309,15 +321,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
-_heroku = os.environ.get("DYNO") is not None
 engine = create_async_engine(
     DATABASE_URL,
-    connect_args=({"ssl": True} if _heroku and os.getenv("DATABASE_URL") else {}),
-    echo=True,
+    connect_args=db_engine_connect_args(),
+    echo=SQLALCHEMY_ECHO,
     pool_size=20,
     max_overflow=40,
     pool_timeout=60,
     pool_pre_ping=True,
+    pool_recycle=DB_POOL_RECYCLE,
 )
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -327,11 +339,12 @@ volunteer_async_session = async_session
 # Census database engine
 census_engine = create_async_engine(
     CENSUS_DATABASE_URL,
-    echo=True,
+    echo=SQLALCHEMY_ECHO,
     pool_size=20,
     max_overflow=40,
     pool_timeout=60,
     pool_pre_ping=True,
+    pool_recycle=DB_POOL_RECYCLE,
 )
 census_async_session = async_sessionmaker(census_engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -847,15 +860,19 @@ async def health():
 @app.get("/debug/config", include_in_schema=False)
 async def debug_config():
     return {
+        "APP_ENV": APP_ENV,
+        "is_production": IS_PRODUCTION,
+        "is_development": IS_DEVELOPMENT,
+        "use_remote_database": USE_REMOTE_DATABASE,
         "POSTGRES_HOST": POSTGRES_HOST,
         "POSTGRES_DB": POSTGRES_DB,
         "POSTGRES_PORT": POSTGRES_PORT,
         "POSTGRES_USER": POSTGRES_USER,
-        "DATABASE_URL": DATABASE_URL[:50] + "...",
+        "database_url_prefix": (DATABASE_URL[:50] + "...") if len(DATABASE_URL) > 50 else DATABASE_URL,
     }
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8001")))

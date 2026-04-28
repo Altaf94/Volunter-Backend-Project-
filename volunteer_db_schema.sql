@@ -192,6 +192,8 @@ CREATE TABLE roles (
 
     CREATE INDEX idx_volunteer_record_cnic ON volunteer_record (cnic);
     CREATE INDEX idx_volunteer_record_event_id ON volunteer_record (event_id);
+    -- by-import-or-user and checker workloads filter on checker_id
+    CREATE INDEX idx_volunteer_record_checker_id ON volunteer_record (checker_id);
 
 
 

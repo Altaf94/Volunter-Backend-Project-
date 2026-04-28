@@ -26,7 +26,8 @@ INSERT INTO duty_types (name, is_active) VALUES
 ('Security', true),
 ('Access Control', true),
 ('Pani', true),
-('Transport', true)
+('Transport', true),
+('All', true)
 ON CONFLICT (name) DO NOTHING;
 
 -- Insert Access Level - Duty Type Mappings
@@ -47,5 +48,6 @@ INSERT INTO access_level_duty_types (access_level_id, duty_type_id) VALUES
 ((SELECT id FROM access_levels WHERE name='Holding Area'), (SELECT id FROM duty_types WHERE name='Washroom')),
 ((SELECT id FROM access_levels WHERE name='Outside'), (SELECT id FROM duty_types WHERE name='Pani')),
 ((SELECT id FROM access_levels WHERE name='Outside'), (SELECT id FROM duty_types WHERE name='Security')),
-((SELECT id FROM access_levels WHERE name='Outside'), (SELECT id FROM duty_types WHERE name='Transport'))
+((SELECT id FROM access_levels WHERE name='Outside'), (SELECT id FROM duty_types WHERE name='Transport')),
+((SELECT id FROM access_levels WHERE name='All'), (SELECT id FROM duty_types WHERE name='All'))
 ON CONFLICT DO NOTHING;

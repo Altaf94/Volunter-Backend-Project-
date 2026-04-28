@@ -7,13 +7,14 @@
 import uuid
 import logging
 import os
+from collections import defaultdict
 import jwt
 from datetime import datetime
 from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import AliasChoices, BaseModel, Field
-from sqlalchemy import func, select, and_, or_, update
+from sqlalchemy import bindparam, func, select, and_, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from volunteer_schemas_v2 import (
@@ -123,6 +124,30 @@ def generate_batch_id() -> str:
 def normalize_cnic(cnic: str) -> str:
     """Remove dashes from CNIC"""
     return cnic.replace("-", "").strip() if cnic else ""
+
+
+def register_implies_approval(register: Optional[str]) -> bool:
+    """True only when the checker marked census registration as an explicit yes.
+
+    Upload columns often use ``register``; anything else (including "No" and empty)
+    means not registered for approval.
+    """
+    v = (register or "No").strip().lower()
+    return v in ("yes", "y", "true", "1")
+
+
+def decision_status_after_register(register: Optional[str], decision_status: str) -> str:
+    """Apply product rule: not registered cannot be Ok (only Ok/pending are downgraded)."""
+    if register_implies_approval(register or "No"):
+        return decision_status
+    if (decision_status or "").strip().lower() in ("ok", "pending"):
+        return "Rejected"
+    return decision_status
+
+
+def effective_decision_status_for_read(register: Optional[str], decision_status: Optional[str]) -> str:
+    """Response shaping for list endpoints: align decision with register for legacy rows."""
+    return decision_status_after_register(register, decision_status or "pending")
 
 
 async def _resolve_name_to_id(db: AsyncSession, table: str, value: Union[int, str, None]) -> Optional[int]:
@@ -380,6 +405,13 @@ async def get_event_access_level_duty_requirements(
 
 class VolunteerRecordQuery(BaseModel):
     userId: int = Field(..., alias="userId")
+    limit: Optional[int] = Field(
+        None,
+        ge=1,
+        le=20_000,
+        description="Optional max rows. Omit to return all matches (slower for large data).",
+    )
+    offset: int = Field(0, ge=0, description="Row offset when using limit (ORDER BY vr.id).")
 
 
 class VolunteerRecordCreate(BaseModel):
@@ -411,30 +443,40 @@ async def get_volunteers_by_user_or_import(
     Returns event, access level, and duty type names instead of IDs.
     """
     request_id = _request_id(request)
-    logger.info(f"[{request_id}] /volunteers/by-import-or-user userId={query.userId}")
-    sql = """
-    SELECT 
-        vr.id, 
-        vr.record_number, 
-        vr.cnic, 
-        vr.name, 
+    logger.info(
+        f"[{request_id}] /volunteers/by-import-or-user userId={query.userId} "
+        f"limit={query.limit} offset={query.offset}"
+    )
+    base_sql = """
+    SELECT
+        vr.id,
+        vr.record_number,
+        vr.cnic,
+        vr.name,
         vr.register,
         e.name as event_name,
         al.name as access_level_name,
         dt.name as duty_type_name,
-        vr.record_status, 
-        vr.decision_status, 
-        vr.checker_id, 
-        vr.import_id, 
-        vr.created_at, 
-        vr.updated_at 
+        vr.record_status,
+        vr.decision_status,
+        vr.checker_id,
+        vr.import_id,
+        vr.created_at,
+        vr.updated_at
     FROM volunteer_record vr
     LEFT JOIN events e ON e.id = vr.event_id
     LEFT JOIN access_levels al ON al.id = vr.access_level_id
     LEFT JOIN duty_types dt ON dt.id = vr.duty_type_id
     WHERE vr.checker_id = :userId
+    ORDER BY vr.id
     """
-    params = {"userId": query.userId}
+    params: dict = {"userId": query.userId}
+    if query.limit is not None:
+        sql = base_sql + " LIMIT :limit OFFSET :offset"
+        params["limit"] = query.limit
+        params["offset"] = query.offset
+    else:
+        sql = base_sql
 
     stmt = text(sql)
     try:
@@ -465,17 +507,18 @@ async def get_volunteers_by_user_or_import(
     out = []
     for r in rows:
         m = r._mapping
+        reg = m.get("register")
         out.append({
             "id": m.get("id"),
             "recordNumber": m.get("record_number"),
             "cnic": m.get("cnic"),
             "name": m.get("name"),
-            "register": m.get("register"),
+            "register": reg,
             "eventName": m.get("event_name"),
             "accessLevelName": m.get("access_level_name"),
             "dutyTypeName": m.get("duty_type_name"),
             "recordStatus": m.get("record_status"),
-            "decisionStatus": m.get("decision_status"),
+            "decisionStatus": effective_decision_status_for_read(reg, m.get("decision_status")),
             "checkerId": m.get("checker_id"),
             "importId": m.get("import_id"),
             "createdAt": m.get("created_at").isoformat() if m.get("created_at") else None,
@@ -500,37 +543,97 @@ async def cnic_usage_batch(
     census_db: AsyncSession = Depends(census_db_session),
     volunteer_db: AsyncSession = Depends(volunteer_db_session),
 ):
-    """Check CNIC existence in census DB only (batch mode)."""
+    """Check CNICs against census: ``FamilyLevelDetails`` (IdNumber) and ``Form`` (head + family CNICs)."""
     request_id = _request_id(request)
     normalized_cnics = [normalize_cnic(c) for c in payload.cnics if normalize_cnic(c)]
+    _c_host = os.getenv("CENSUS_HOST", "jamat-postgres.postgres.database.azure.com")
+    _c_db = os.getenv("CENSUS_DB", "census_db_updated")
     logger.info(
-        f"[{request_id}] /cnic-usage/batch raw={len(payload.cnics)} normalized={len(normalized_cnics)}"
+        f"[{request_id}] /cnic-usage/batch raw={len(payload.cnics)} normalized={len(normalized_cnics)} "
+        f"census={_c_host} db={_c_db} (set CENSUS_* in .env if this is not the DB you are checking in SQL tools)"
     )
     if not normalized_cnics:
         return {"success": True, "results": [], "requestId": request_id}
 
-    sql = text("""
-        SELECT replace(coalesce("IdNumber", ''), '-', '') AS cnic_norm, COUNT(*)::int AS cnt
+    # FamilyLevelDetails: one row per person (IdNumber).
+    sql_fld = text("""
+        SELECT
+            replace(coalesce(btrim("IdNumber"::text), ''), '-', '') AS cnic_norm,
+            COUNT(*)::int AS cnt
         FROM "FamilyLevelDetails"
-        WHERE replace(coalesce("IdNumber", ''), '-', '') = ANY(:cnics)
-        GROUP BY replace(coalesce("IdNumber", ''), '-', '')
-    """)
+        WHERE replace(coalesce(btrim("IdNumber"::text), ''), '-', '') IN :cnics
+        GROUP BY replace(coalesce(btrim("IdNumber"::text), ''), '-', '')
+    """).bindparams(bindparam("cnics", expanding=True))
+
+    # Form: ``HouseHoldCNIC`` and each element of ``FamilyMembersCNICInPakistan`` (distinct FormId per CNIC).
+    sql_form_hh = text("""
+        SELECT
+            replace(coalesce(btrim(f."HouseHoldCNIC"::text), ''), '-', '') AS cnic_norm,
+            f."FormId" AS form_id
+        FROM "Form" f
+        WHERE replace(coalesce(btrim(f."HouseHoldCNIC"::text), ''), '-', '') IN :cnics
+    """).bindparams(bindparam("cnics", expanding=True))
+    sql_form_fam = text("""
+        SELECT
+            replace(coalesce(btrim(m::text), ''), '-', '') AS cnic_norm,
+            f."FormId" AS form_id
+        FROM "Form" f
+        CROSS JOIN LATERAL unnest(
+            COALESCE(f."FamilyMembersCNICInPakistan", ARRAY[]::varchar(20)[])
+        ) AS t(m)
+        WHERE replace(coalesce(btrim(m::text), ''), '-', '') IN :cnics
+    """).bindparams(bindparam("cnics", expanding=True))
 
     try:
-        result = await census_db.execute(sql, {"cnics": normalized_cnics})
-        counts = {row[0]: row[1] for row in result.fetchall()}
+        # Only these strings are valid matches for this request (avoids any stray key confusion).
+        allowed = set(normalized_cnics)
+        res_fld = await census_db.execute(sql_fld, {"cnics": normalized_cnics})
+        counts_fld = {
+            str(row[0]): row[1]
+            for row in res_fld.fetchall()
+            if row[0] is not None and str(row[0]) in allowed
+        }
+        # Distinct form ids per cnic (head row + family array may reference same form)
+        form_ids = defaultdict(set)  # cnic -> distinct FormId strings
+        for r in (await census_db.execute(sql_form_hh, {"cnics": normalized_cnics})).fetchall():
+            c_norm, fid = (str(r[0]), r[1]) if r[0] else (None, None)
+            if c_norm and c_norm in allowed:
+                form_ids[c_norm].add(str(fid) if fid is not None else "")
+        for r in (await census_db.execute(sql_form_fam, {"cnics": normalized_cnics})).fetchall():
+            c_norm, fid = (str(r[0]), r[1]) if r[0] else (None, None)
+            if c_norm and c_norm in allowed:
+                form_ids[c_norm].add(str(fid) if fid is not None else "")
+        counts_form = {c: len(ids) for c, ids in form_ids.items() if c in allowed and ids}
+
+        out_results = []
+        for cnic in normalized_cnics:
+            n_fld = counts_fld.get(cnic, 0)
+            n_form = counts_form.get(cnic, 0)
+            out_results.append(
+                {
+                    "cnic": cnic,
+                    "familyLevelDetails": {
+                        "present": n_fld > 0,
+                        "matchCount": n_fld,
+                    },
+                    "form": {
+                        "present": n_form > 0,
+                        "matchCount": n_form,
+                    },
+                    "isUsed": n_fld > 0 or n_form > 0,
+                    "usageCount": n_fld + n_form,
+                }
+            )
 
         return {
             "success": True,
-            "results": [
-                {
-                    "cnic": cnic,
-                    "isUsed": counts.get(cnic, 0) > 0,
-                    "usageCount": counts.get(cnic, 0)
-                }
-                for cnic in normalized_cnics
-            ],
+            "results": out_results,
             "requestId": request_id,
+            # Same connection as main.py CENSUS_* so you can compare with your SQL client.
+            "meta": {
+                "censusHost": _c_host,
+                "censusDatabase": _c_db,
+            },
         }
     except Exception as exc:
         # Log against the volunteer (primary) DB - census DB sessions are
@@ -614,7 +717,9 @@ async def create_volunteer_record(
         "access_level_id": access_level_id,
         "duty_type_id": duty_type_id,
         "record_status": "maker",
-        "decision_status": record.decision_status,
+        "decision_status": decision_status_after_register(
+            record.register, record.decision_status or "pending"
+        ),
         "register": record.register or "No",
         "checker_id": record.userId,
         "import_id": record.import_id,
@@ -697,8 +802,8 @@ async def create_volunteer_records(
             ex_sql = text("""
                 SELECT id, cnic, event_id, access_level_id, duty_type_id, record_status
                 FROM volunteer_record
-                WHERE replace(coalesce(cnic,''),'-','') = ANY(:cnics)
-            """)
+                WHERE replace(coalesce(cnic,''),'-','') IN :cnics
+            """).bindparams(bindparam("cnics", expanding=True))
             ex_res = await volunteer_db.execute(ex_sql, {"cnics": normalized_unique})
             for row in ex_res.fetchall():
                 cid = str(row[1]).replace('-', '') if row[1] else ''
@@ -842,6 +947,18 @@ async def create_volunteer_records(
                             inc["decision_status"] = "Ok"
                             inc["reason"] = None
 
+        # Not registered in census (register is not an explicit yes) => cannot be Ok
+        for inc in incoming:
+            before = inc["decision_status"]
+            after = decision_status_after_register(inc["rec"].register, before)
+            inc["decision_status"] = after
+            if (
+                after == "Rejected"
+                and before in ("Ok", "pending")
+                and not register_implies_approval(inc["rec"].register or "No")
+            ):
+                inc["reason"] = "Not registered"
+
         # Insert all incoming records with computed decision_status
         for inc in incoming:
             rec = inc["rec"]
@@ -925,6 +1042,41 @@ class MakerDecisionUpdate(BaseModel):
     decisionStatus: str = Field(..., description="Decision status set by maker")
     checkerId: int = Field(..., description="Checker ID")
     importId: int = Field(..., description="Import ID")
+
+
+class CheckerSubmitDecision(BaseModel):
+    """One maker_decisions row update from checker submit.
+
+    The ``maker_decisions`` row id may be sent as ``decisionId``, ``id``, or ``Id``.
+    """
+
+    model_config = {"populate_by_name": True}
+
+    decisionId: int = Field(
+        ...,
+        validation_alias=AliasChoices("decisionId", "id", "Id"),
+        description="maker_decisions.id (audit row id)",
+    )
+    decisionStatus: Optional[str] = Field(
+        None, description="Checker-final decision status (optional)"
+    )
+    reason: Optional[str] = Field(None, description="Optional checker reason")
+
+
+class CheckerSubmitPayload(BaseModel):
+    """Checker submit body: top-level ``importId`` plus a ``decisions`` array."""
+
+    model_config = {"populate_by_name": True}
+
+    importId: Optional[int] = Field(
+        None,
+        description="If set, only update rows that belong to this import (safety check).",
+    )
+    decisions: List[CheckerSubmitDecision] = Field(
+        ...,
+        min_length=1,
+        description="Updates to apply in ``maker_decisions``",
+    )
 
 
 @volunteer_router.post("/volunteers/maker-decisions")
@@ -1079,3 +1231,258 @@ async def update_maker_decisions(
                 "requestId": request_id,
             },
         )
+
+
+@volunteer_router.post("/volunteers/maker-decisions/submit")
+async def submit_checker_maker_decisions(
+    request: Request,
+    payload: CheckerSubmitPayload,
+    volunteer_db: AsyncSession = Depends(volunteer_db_session),
+):
+    """Checker submit: update rows in maker_decisions.
+
+    Body format::
+
+        {
+          "importId": 116,
+          "decisions": [
+            { "Id": 9162, "decisionStatus": "Ok", "reason": "..." },
+            { "decisionId": 9163, "decisionStatus": "Reject", "reason": "..." }
+          ]
+        }
+
+    Each decision row is identified by ``decisionId`` or ``id`` or ``Id`` (same value:
+    ``maker_decisions.id``). When ``importId`` is set, only rows for that import are
+    updated.
+    """
+    request_id = _request_id(request)
+    checker_id = _user_id_from_request(request) or 0
+    now = datetime.utcnow()
+
+    logger.info(
+        f"[{request_id}] /volunteers/maker-decisions/submit count={len(payload.decisions)} "
+        f"checker_id={checker_id} importId={payload.importId!r}"
+    )
+
+    updated_ids: list = []
+    skipped_ids: list = []
+    try:
+        for idx, item in enumerate(payload.decisions):
+            try:
+                if payload.importId is not None:
+                    exists_sql = text(
+                        """
+                        SELECT id
+                        FROM maker_decisions
+                        WHERE id = :id AND import_id = :import_id
+                        LIMIT 1
+                        """
+                    )
+                    exists_params = {"id": item.decisionId, "import_id": payload.importId}
+                else:
+                    exists_sql = text(
+                        """
+                        SELECT id
+                        FROM maker_decisions
+                        WHERE id = :id
+                        LIMIT 1
+                        """
+                    )
+                    exists_params = {"id": item.decisionId}
+
+                found = (await volunteer_db.execute(exists_sql, exists_params)).scalar_one_or_none()
+                if found is None:
+                    skipped_ids.append(item.decisionId)
+                    continue
+
+                update_sql = text(
+                    """
+                    UPDATE maker_decisions
+                    SET
+                        decision_status = COALESCE(:decision_status, decision_status),
+                        reason = COALESCE(:reason, reason),
+                        checker_id = :checker_id,
+                        updated_at = :updated_at
+                    WHERE id = :id
+                    """
+                )
+                await volunteer_db.execute(
+                    update_sql,
+                    {
+                        "id": item.decisionId,
+                        "decision_status": item.decisionStatus,
+                        "reason": item.reason,
+                        "checker_id": checker_id or None,
+                        "updated_at": now,
+                    },
+                )
+                updated_ids.append(item.decisionId)
+            except Exception as exc:
+                skipped_ids.append(item.decisionId)
+                await ErrorLogger.log_error(
+                    db=volunteer_db,
+                    code=ErrorCode.DB_UPDATE_FAILED,
+                    message=f"Failed checker submit update for maker_decision {item.decisionId}: {exc}",
+                    status_code=500,
+                    severity=ErrorSeverity.ERROR,
+                    details={
+                        "decision_id": item.decisionId,
+                        "index": idx,
+                        "import_id": payload.importId,
+                    },
+                    request_id=request_id,
+                    user_id=checker_id or None,
+                    request=request,
+                    exc=exc,
+                )
+
+        await volunteer_db.commit()
+        return {
+            "success": True,
+            "updated": len(updated_ids),
+            "updatedIds": updated_ids,
+            "skipped": len(skipped_ids),
+            "skippedIds": skipped_ids,
+            "requestId": request_id,
+        }
+    except Exception as exc:
+        await volunteer_db.rollback()
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.DB_QUERY_FAILED,
+            message=f"Checker submit batch failed: {exc}",
+            status_code=500,
+            severity=ErrorSeverity.CRITICAL,
+            details={
+                "total_records": len(payload.decisions),
+                "import_id": payload.importId,
+            },
+            request_id=request_id,
+            user_id=checker_id or None,
+            request=request,
+            exc=exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "errorCode": ErrorCode.DB_QUERY_FAILED.value,
+                "message": "Checker submit failed",
+                "requestId": request_id,
+            },
+        )
+
+
+@volunteer_router.get("/volunteers/maker-decisions")
+async def get_maker_decisions_by_import(
+    request: Request,
+    import_id: Optional[int] = Query(
+        None,
+        alias="importId",
+        description="If set, return only decisions for this import (still grouped under that key).",
+    ),
+    volunteer_db: AsyncSession = Depends(volunteer_db_session),
+):
+    """Return `maker_decisions` rows grouped by `import_id`.
+
+    Each key in ``byImportId`` is the import file id (string). The value is a list
+    of decision objects for that import, ordered by audit row id. Use optional
+    query parameter ``importId`` to return a single group.
+    """
+    request_id = _request_id(request)
+    logger.info(
+        f"[{request_id}] GET /volunteers/maker-decisions importId={import_id!r}"
+    )
+
+    base_sql = """
+    SELECT
+        md.id,
+        md.volunteer_record_id,
+        md.decision_status,
+        md.reason,
+        md.record_number,
+        md.cnic,
+        md.name,
+        e.name AS event_name,
+        al.name AS access_level_name,
+        dt.name AS duty_type_name,
+        md.record_status,
+        md.register,
+        md.checker_id,
+        md.import_id,
+        md.created_at,
+        md.updated_at,
+        mk.full_name AS maker_name
+    FROM maker_decisions md
+    LEFT JOIN events e ON e.id = md.event_id
+    LEFT JOIN access_levels al ON al.id = md.access_level_id
+    LEFT JOIN duty_types dt ON dt.id = md.duty_type_id
+    LEFT JOIN users mk ON mk.id = md.maker_id
+    """
+    if import_id is not None:
+        sql = text(base_sql + " WHERE md.import_id = :import_id ORDER BY md.id")
+        params = {"import_id": import_id}
+    else:
+        sql = text(base_sql + " ORDER BY md.import_id NULLS LAST, md.id")
+        params = {}
+
+    try:
+        result = await volunteer_db.execute(sql, params)
+        rows = result.fetchall()
+    except Exception as exc:
+        await ErrorLogger.log_error(
+            db=volunteer_db,
+            code=ErrorCode.DB_QUERY_FAILED,
+            message=f"Failed to load maker decisions: {exc}",
+            status_code=500,
+            severity=ErrorSeverity.ERROR,
+            details={"import_id": import_id},
+            request_id=request_id,
+            request=request,
+            exc=exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "errorCode": ErrorCode.DB_QUERY_FAILED.value,
+                "message": "Could not load maker decisions",
+                "requestId": request_id,
+            },
+        )
+
+    by_import: dict = {}
+    for r in rows:
+        m = r._mapping
+        iid = m.get("import_id")
+        key = str(iid) if iid is not None else "null"
+        if key not in by_import:
+            by_import[key] = []
+        by_import[key].append(
+            {
+                "decisionId": m.get("id"),
+                "id": m.get("volunteer_record_id"),
+                "recordNumber": m.get("record_number"),
+                "cnic": m.get("cnic"),
+                "name": m.get("name"),
+                "register": m.get("register"),
+                "eventName": m.get("event_name"),
+                "accessLevelName": m.get("access_level_name"),
+                "dutyTypeName": m.get("duty_type_name"),
+                "recordStatus": m.get("record_status"),
+                "decisionStatus": m.get("decision_status"),
+                "reason": m.get("reason"),
+                "makerId": m.get("maker_name"),
+                "checkerId": m.get("checker_id"),
+                "importId": m.get("import_id"),
+                "createdAt": m.get("created_at").isoformat()
+                if m.get("created_at")
+                else None,
+                "updatedAt": m.get("updated_at").isoformat()
+                if m.get("updated_at")
+                else None,
+            }
+        )
+
+    return {
+        "requestId": request_id,
+        "byImportId": by_import,
+    }

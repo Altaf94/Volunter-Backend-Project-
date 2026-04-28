@@ -6,8 +6,9 @@ services:
     build: .
     container_name: jamatkhana_api
     ports:
-      - "8000:8000"
+      - "8001:8001"
     environment:
+      - PORT=8001
       - POSTGRES_HOST=jamat-postgres.postgres.database.azure.com
       - POSTGRES_USER=postgresadmin
       - POSTGRES_PASSWORD=wuFdyv-zorruk-gokni2
@@ -29,7 +30,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 
 volumes:
   postgres_data:

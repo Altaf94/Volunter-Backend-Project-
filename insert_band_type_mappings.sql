@@ -14,6 +14,7 @@ FROM access_levels al
 CROSS JOIN duty_types dt
 WHERE al.is_active = true
   AND dt.is_active = true
+  AND dt.name <> 'All'
 ON CONFLICT (band_type_id, access_level_id, duty_type_id) DO NOTHING;
 
 -- Verify the mapping
