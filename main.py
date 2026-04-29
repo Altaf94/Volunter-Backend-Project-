@@ -104,6 +104,9 @@ _cors_base = [
     "http://127.0.0.1:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    # React frontend deployed on Heroku.
+    "http://volunter-reactjs-project-b674b2edbe45.herokuapp.com",
+    "https://volunter-reactjs-project-b674b2edbe45.herokuapp.com",
     # Heroku is accessible via both http and https depending on how the UI is loaded.
     "http://northen-volunteer-25070e7d956a.herokuapp.com",
     "https://northen-volunteer-25070e7d956a.herokuapp.com",
