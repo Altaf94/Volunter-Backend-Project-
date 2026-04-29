@@ -104,6 +104,8 @@ _cors_base = [
     "http://127.0.0.1:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    # Heroku is accessible via both http and https depending on how the UI is loaded.
+    "http://northen-volunteer-25070e7d956a.herokuapp.com",
     "https://northen-volunteer-25070e7d956a.herokuapp.com",
 ]
 _cors_extra = [o.strip() for o in (os.getenv("CORS_ORIGINS") or "").split(",") if o.strip()]
@@ -144,15 +146,6 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json",
     servers=_OPENAPI_SERVERS,
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ALLOW_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["X-Request-ID"],
 )
 
 
@@ -227,6 +220,17 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(RequestContextMiddleware)
+
+# Put CORSMiddleware last so it is outermost. This ensures CORS headers are present
+# even when RequestContextMiddleware returns an error response.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
+)
 
 
 # ============================================
